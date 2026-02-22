@@ -1,8 +1,30 @@
-# ═══════════════════════════════════════════════
-# Jules Target Configuration
-# ═══════════════════════════════════════════════
+# ╔═══════════════════════════════════════════════════════════════╗
+# ║              JULES CONTROLLER — TARGET CONFIG               ║
+# ╠═══════════════════════════════════════════════════════════════╣
+# ║  Questo file definisce i repository su cui Jules opererà    ║
+# ║  e le automazioni cicliche da eseguire su ciascuno.         ║
+# ║                                                             ║
+# ║  📖 COME FUNZIONA:                                          ║
+# ║  Ogni "target" è un repository GitHub.                      ║
+# ║  Ogni target può avere più "automazioni", ognuna con        ║
+# ║  un nome identificativo e un prompt che dice a Jules        ║
+# ║  cosa fare.                                                 ║
+# ║                                                             ║
+# ║  ⏰ Il controller.yml eseguirà TUTTE le automazioni         ║
+# ║  di TUTTI i target ogni notte alle 4:00 AM.                 ║
+# ║                                                             ║
+# ║  📱 Puoi anche comandare Jules dal telefono creando         ║
+# ║  una Issue su un repo target con la label "jules".          ║
+# ╚═══════════════════════════════════════════════════════════════╝
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  TARGET ATTIVI
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 targets:
+
+  # ── RPG Life Companion ──────────────────
   - repo: "GabryXn/rpg-life-companion"
     automations:
       - name: "vulnerability-scan"
@@ -16,6 +38,7 @@ targets:
           6. Esegui i test per verificare che tutto funzioni dopo le modifiche.
           7. Crea una PR solo se trovi e correggi vulnerabilità reali.
 
+  # ── Bot Orchestrator Hub ────────────────
   - repo: "GabryXn/bot-orchestrator-hub"
     automations:
       - name: "vulnerability-scan"
@@ -28,3 +51,85 @@ targets:
           5. Aggiorna le dipendenze vulnerabili alla versione sicura più recente.
           6. Esegui i test per verificare che tutto funzioni dopo le modifiche.
           7. Crea una PR solo se trovi e correggi vulnerabilità reali.
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  📋 TEMPLATE — COPIA E INCOLLA PER AGGIUNGERE NUOVI TARGET
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#
+# Copia il blocco qui sotto, incollalo nella sezione "TARGET ATTIVI"
+# sopra, e modifica i valori tra < >.
+#
+# IMPORTANTE:
+#   - Rimuovi il "#" all'inizio di ogni riga dopo aver incollato!
+#   - L'indentazione è fondamentale in YAML: usa solo spazi, mai tab.
+#   - Il "name" deve essere unico per ogni automazione dello stesso repo.
+#   - Il "prompt" è il messaggio che Jules riceverà: sii chiaro e specifico.
+#
+# ┌─────────────────────────────────────────────────────────────┐
+# │  TEMPLATE: Nuovo Target (1 automazione)                    │
+# └─────────────────────────────────────────────────────────────┘
+#
+#  # ── <Nome Progetto> ────────────────────
+#  - repo: "<tuo-username>/<nome-repository>"
+#    automations:
+#      - name: "<nome-automazione>"
+#        prompt: |
+#          <Scrivi qui cosa vuoi che Jules faccia.
+#          Puoi andare a capo e scrivere istruzioni dettagliate.
+#          Più sei specifico, migliore sarà il risultato.>
+#
+#
+# ┌─────────────────────────────────────────────────────────────┐
+# │  TEMPLATE: Nuovo Target (automazioni multiple)             │
+# └─────────────────────────────────────────────────────────────┘
+#
+#  # ── <Nome Progetto> ────────────────────
+#  - repo: "<tuo-username>/<nome-repository>"
+#    automations:
+#      - name: "<nome-prima-automazione>"
+#        prompt: |
+#          <Istruzioni per la prima automazione>
+#
+#      - name: "<nome-seconda-automazione>"
+#        prompt: |
+#          <Istruzioni per la seconda automazione>
+#
+#      - name: "<nome-terza-automazione>"
+#        prompt: |
+#          <Istruzioni per la terza automazione>
+#
+#
+# ┌─────────────────────────────────────────────────────────────┐
+# │  ESEMPI DI AUTOMAZIONI UTILI (copia queste come ispirazione)│
+# └─────────────────────────────────────────────────────────────┘
+#
+#      - name: "dependency-update"
+#        prompt: |
+#          Controlla se ci sono dipendenze obsolete.
+#          Aggiornale alla versione stabile più recente.
+#          Esegui i test e crea una PR solo se passano tutti.
+#
+#      - name: "test-coverage"
+#        prompt: |
+#          Analizza la copertura dei test.
+#          Scrivi i test mancanti per le funzionalità critiche.
+#          Punta ad avere almeno l'80% di coverage.
+#
+#      - name: "performance-refactor"
+#        prompt: |
+#          Cerca codice inefficiente e ottimizzalo.
+#          Cerca N+1 queries, loop inutili, re-render non necessari.
+#          Crea una PR con le ottimizzazioni e i benchmark prima/dopo.
+#
+#      - name: "docs-update"
+#        prompt: |
+#          Analizza il codice e aggiorna la documentazione.
+#          Assicurati che README, commenti e JSDoc siano aggiornati.
+#          Documenta funzioni pubbliche non documentate.
+#
+#      - name: "code-cleanup"
+#        prompt: |
+#          Rimuovi codice morto, import inutilizzati e TODO scaduti.
+#          Applica le best practice di linting e formattazione.
+#          Non cambiare la logica, solo pulizia.
