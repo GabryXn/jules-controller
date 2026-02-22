@@ -1,0 +1,26 @@
+name: Jules Master Controller
+
+on:
+  schedule:
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+jobs:
+  run-agents:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Trigger agents on targets
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          # Convert YAML to JSON, then iterate through each element using jq
+          yq -o=json jules_targets.yml | jq -c '.[]' | while read -r item; do
+            REPO=$(echo "$item" | jq -r '.repo')
+            PROMPT=$(echo "$item" | jq -r '.prompt')
+            
+            echo "Triggering jules_agent.yml on $REPO"
+            gh workflow run jules_agent.yml -R "$REPO" -f prompt="$PROMPT"
+          done

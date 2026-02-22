@@ -1,0 +1,4 @@
+- repo: "INSERISCI_TUO_USER/nome-repo-backend"
+  prompt: "Esegui una scansione di sicurezza sui pacchetti e aggiorna le dipendenze."
+- repo: "INSERISCI_TUO_USER/nome-repo-frontend"
+  prompt: "Esegui un refactoring leggero per migliorare le performance e scrivi i test mancanti."
