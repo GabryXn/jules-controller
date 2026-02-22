@@ -1,6 +1,8 @@
 name: Deploy Jules Workflows to Targets
 
 on:
+  schedule:
+    - cron: '0 3 * * *'
   workflow_dispatch:
 
 jobs:
@@ -10,7 +12,7 @@ jobs:
       - name: Checkout controller repository
         uses: actions/checkout@v4
 
-      - name: Deploy jules_agent.yml to all target repos
+      - name: Deploy jules_agent.yml and create label
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
@@ -23,10 +25,10 @@ jobs:
           # Iterate through all target repos
           gh repo list GabryXn --limit 1000 --no-archived --json nameWithOwner --jq '.[].nameWithOwner' | while read -r REPO; do
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "📦 Deploying jules_agent.yml to $REPO"
+            echo "📦 Processing $REPO"
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-            # Check if file already exists to get its SHA (needed for updates)
+            # 1. Deploy the workflow file
             EXISTING_SHA=$(gh api "repos/$REPO/contents/$DEST_PATH" --jq '.sha' 2>/dev/null || echo "")
 
             if [ -n "$EXISTING_SHA" ]; then
@@ -41,7 +43,17 @@ jobs:
                 -f message="chore: add jules_agent.yml from controller" \
                 -f content="$CONTENT"
             fi
-
+            
+            # 2. Add the 'jules' label
+            echo "  🏷️ Ensuring 'jules' label exists..."
+            gh api --method POST \
+              -H "Accept: application/vnd.github+json" \
+              /repos/$REPO/labels \
+              -f name='jules' \
+              -f description='Trigga il Google Jules AI Agent' \
+              -f color='715cd7' \
+              --silent 2>/dev/null || true
+              
             echo "  ✅ Done for $REPO"
             echo ""
           done
