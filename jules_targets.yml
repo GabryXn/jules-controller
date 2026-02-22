@@ -1,34 +1,30 @@
 # ═══════════════════════════════════════════════
 # Jules Target Configuration
 # ═══════════════════════════════════════════════
-# Ogni progetto può avere multiple automazioni
-# con prompt diversi. Sostituisci INSERISCI_TUO_USER
-# con il tuo username GitHub.
-# ═══════════════════════════════════════════════
 
 targets:
-  - repo: "INSERISCI_TUO_USER/nome-repo-backend"
+  - repo: "GabryXn/rpg-life-companion"
     automations:
-      - name: "security-scan"
+      - name: "vulnerability-scan"
         prompt: |
-          Esegui una scansione di sicurezza sui pacchetti.
-          Aggiorna le dipendenze vulnerabili.
-          Esegui i test per verificare che tutto funzioni dopo gli aggiornamenti.
-      - name: "dependency-update"
-        prompt: |
-          Controlla se ci sono dipendenze obsolete.
-          Aggiornale alla versione stabile più recente.
-          Esegui i test e crea una PR solo se passano tutti.
+          Esegui un'analisi completa di sicurezza e vulnerabilità su questo progetto:
+          1. Controlla tutte le dipendenze per vulnerabilità note (CVE).
+          2. Cerca hardcoded secrets, API keys o password nel codice.
+          3. Verifica che gli input siano validati e sanitizzati correttamente.
+          4. Controlla eventuali problemi di injection (SQL, command, XSS).
+          5. Aggiorna le dipendenze vulnerabili alla versione sicura più recente.
+          6. Esegui i test per verificare che tutto funzioni dopo le modifiche.
+          7. Crea una PR solo se trovi e correggi vulnerabilità reali.
 
-  - repo: "INSERISCI_TUO_USER/nome-repo-frontend"
+  - repo: "GabryXn/bot-orchestrator-hub"
     automations:
-      - name: "performance-refactor"
+      - name: "vulnerability-scan"
         prompt: |
-          Esegui un refactoring leggero per migliorare le performance.
-          Cerca componenti che si ri-renderizzano inutilmente.
-          Ottimizza i bundle size dove possibile.
-      - name: "test-coverage"
-        prompt: |
-          Analizza la copertura dei test.
-          Scrivi i test mancanti per le funzionalità critiche.
-          Assicurati che la coverage superi l'80%.
+          Esegui un'analisi completa di sicurezza e vulnerabilità su questo progetto:
+          1. Controlla tutte le dipendenze per vulnerabilità note (CVE).
+          2. Cerca hardcoded secrets, API keys o password nel codice.
+          3. Verifica che gli input siano validati e sanitizzati correttamente.
+          4. Controlla eventuali problemi di injection (SQL, command, XSS).
+          5. Aggiorna le dipendenze vulnerabili alla versione sicura più recente.
+          6. Esegui i test per verificare che tutto funzioni dopo le modifiche.
+          7. Crea una PR solo se trovi e correggi vulnerabilità reali.
