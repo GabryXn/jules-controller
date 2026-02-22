@@ -1,0 +1,47 @@
+name: Deploy Jules Workflows to Targets
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout controller repository
+        uses: actions/checkout@v4
+
+      - name: Deploy jules_agent.yml to all target repos
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          TEMPLATE_FILE="templates/jules_agent.yml"
+          DEST_PATH=".github/workflows/jules_agent.yml"
+
+          # Read the template content and base64 encode it
+          CONTENT=$(base64 -w 0 "$TEMPLATE_FILE")
+
+          # Iterate through all target repos
+          yq -o=json jules_targets.yml | jq -r '.targets[].repo' | sort -u | while read -r REPO; do
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "📦 Deploying jules_agent.yml to $REPO"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+            # Check if file already exists to get its SHA (needed for updates)
+            EXISTING_SHA=$(gh api "repos/$REPO/contents/$DEST_PATH" --jq '.sha' 2>/dev/null || echo "")
+
+            if [ -n "$EXISTING_SHA" ]; then
+              echo "  ↻ Updating existing workflow..."
+              gh api --method PUT "repos/$REPO/contents/$DEST_PATH" \
+                -f message="chore: update jules_agent.yml from controller" \
+                -f content="$CONTENT" \
+                -f sha="$EXISTING_SHA"
+            else
+              echo "  + Creating new workflow..."
+              gh api --method PUT "repos/$REPO/contents/$DEST_PATH" \
+                -f message="chore: add jules_agent.yml from controller" \
+                -f content="$CONTENT"
+            fi
+
+            echo "  ✅ Done for $REPO"
+            echo ""
+          done

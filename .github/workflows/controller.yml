@@ -6,21 +6,35 @@ on:
   workflow_dispatch:
 
 jobs:
-  run-agents:
+  dispatch-agents:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Trigger agents on targets
+      - name: Run Jules on all targets
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+          JULES_API_KEY: ${{ secrets.JULES_API_KEY }}
         run: |
-          # Convert YAML to JSON, then iterate through each element using jq
-          yq -o=json jules_targets.yml | jq -c '.[]' | while read -r item; do
-            REPO=$(echo "$item" | jq -r '.repo')
-            PROMPT=$(echo "$item" | jq -r '.prompt')
-            
-            echo "Triggering jules_agent.yml on $REPO"
-            gh workflow run jules_agent.yml -R "$REPO" -f prompt="$PROMPT"
+          # Parse jules_targets.yml and trigger jules_agent.yml on each target
+          # For each repo, iterate through its automations
+          yq -o=json jules_targets.yml | jq -c '.targets[]' | while read -r target; do
+            REPO=$(echo "$target" | jq -r '.repo')
+
+            echo "$target" | jq -c '.automations[]' | while read -r automation; do
+              NAME=$(echo "$automation" | jq -r '.name')
+              PROMPT=$(echo "$automation" | jq -r '.prompt')
+
+              echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+              echo "🤖 Triggering [$NAME] on $REPO"
+              echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+              gh workflow run jules_agent.yml \
+                -R "$REPO" \
+                -f prompt="$PROMPT"
+
+              echo "✅ Dispatched [$NAME] on $REPO"
+              echo ""
+            done
           done
