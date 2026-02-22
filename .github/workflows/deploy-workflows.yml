@@ -21,7 +21,7 @@ jobs:
           CONTENT=$(base64 -w 0 "$TEMPLATE_FILE")
 
           # Iterate through all target repos
-          yq -o=json jules_targets.yml | jq -r '.targets[].repo' | sort -u | while read -r REPO; do
+          gh repo list GabryXn --limit 1000 --json nameWithOwner --jq '.[].nameWithOwner' | while read -r REPO; do
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             echo "📦 Deploying jules_agent.yml to $REPO"
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
