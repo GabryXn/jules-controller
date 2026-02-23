@@ -11,6 +11,10 @@ $repos = gh repo list GabryXn --limit 1000 --no-archived --json nameWithOwner --
 
 foreach ($repo in $repos) {
     if ([string]::IsNullOrWhiteSpace($repo)) { continue }
+    if ($repo -eq "GabryXn/jules-controller") {
+        Write-Host "⏭️  Skipping self (jules-controller)" -ForegroundColor Gray
+        continue
+    }
     
     Write-Host "→ Controllo $repo"
     
@@ -24,7 +28,8 @@ foreach ($repo in $repos) {
         
     if ($LASTEXITCODE -eq 0) {
         Write-Host "  ✅ Label creata!" -ForegroundColor Green
-    } else {
+    }
+    else {
         Write-Host "  ⚡ Label già esistente o errore ignorato." -ForegroundColor Yellow
     }
 }

@@ -1,0 +1,15 @@
+# ⚙️ JULES GLOBAL CONFIGURATION
+# Use this file to enable or disable features across the entire system.
+
+features:
+  # Enable/Disable the nightly cyclic automations (controller.yml)
+  cyclic_automation: true
+
+  # Enable/Disable triggering Jules via GitHub Issues with the "jules" label
+  issue_automation: true
+
+  # Enable/Disable triggering Jules via Google Calendar events
+  calendar_automation: true
+
+  # Enable/Disable the nightly synchronization and deployment of workflows to target repos (deploy-workflows.yml)
+  workflow_deployment: true

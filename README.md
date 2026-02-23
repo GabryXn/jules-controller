@@ -78,32 +78,85 @@ Il file di configurazione per i task ciclici. Contiene:
 - Elenco delle automazioni (nome + prompt dettagliato).
 - Un template integrato per aggiungere facilmente nuovi target.
 
-### Script di Utility
+### `jules_config.yml`
 
-- **`create-labels.ps1`**: Script PowerShell per il bootstrap iniziale delle label su tutti i repo (eseguito localmente).
-- **`create-labels.sh`**: Equivalente Bash per sistemi Linux/WSL.
+Il file di **Controllo Globale** (Centralized Control). Permette di abilitare/disabilitare intere categorie di trigger con un solo flag:
 
----
-
-## ⚙️ Configurazione Iniziale
-
-Per far funzionare il controller, devono essere impostati i seguenti **Repository Secrets** in questo repository (`jules-controller`):
-
-1. **`PAT_TOKEN`**: Un GitHub Personal Access Token (Fine-grained) con permessi di:
-   - `Contents: Read & Write`
-   - `Workflows: Read & Write`
-   - `Secrets: Read & Write`
-   - `Metadata: Read-only`
-2. **`JULES_API_KEY`**: La tua chiave API per accedere a Google Jules.
+- `cyclic_automation`: Attiva/Disattiva l'esecuzione notturna dei target.
+- `issue_automation`: Attiva/Disattiva la risposta di Jules alle Issue etichettate.
+- `calendar_automation`: Attiva/Disattiva l'invio di comandi dal calendario.
+- `workflow_deployment`: Attiva/Disattiva la sincronizzazione automatica dei repo target.
 
 ---
 
-## 📝 Come aggiungere un nuovo target ciclico
+## 📅 4. Automazione tramite Google Calendar (Event-Driven)
 
-1. Apri `jules_targets.yml`.
-2. Copia il blocco dal `TEMPLATE_FOR_COPY_PASTE`.
-3. Inserisci il nome del repository e il prompt desiderato.
-4. Salva e pusha. Il controller lo prenderà in carico alla prossima esecuzione notturna.
+Jules può essere innescato puntualmente al minuto creando un evento sul tuo Google Calendar. Per far questo, c'è un progetto **Node.js/TypeScript** nella cartella `calendar-integration`. L'architettura non usa polling fisso, ma un approccio 100% event-driven ottimizzato per non sprecare risorse su Apps Script.
+
+### Come funziona
+
+1. Crei un evento intitolato `Jules: tuo-username/tuo-repo` sul calendario. La descrizione dell'evento diventa il prompt per Jules.
+2. Il trigger **OnChange** di Google Calendar nota l'evento e crea un trigger temporale "usa-e-getta" programmato esattamente all'orario di inizio.
+3. All'orario stabilito, il trigger si attiva, fa la chiamata API a GitHub, e poi **si autodistrugge**.
+
+### Installazione e Deployment
+
+Avrai bisogno di Node.js e `pnpm` (o `npm`/`yarn`) installati sul tuo PC, e devi aver abilitato l'Accesso alle API di Google Apps Script (in <https://script.google.com/home/usersettings>).
+
+1. **Inizializza il progetto Apps Script vuoto:**
+   Crea un nuovo progetto su script.google.com e segnati il suo **Script ID** (si trova in Impostazioni progetto).
+
+2. **Configurazione Clasp Locale:**
+
+   ```bash
+   cd calendar-integration
+   pnpm install
+   pnpm run login  # Fai il login con il tuo account Google
+   ```
+
+   Crea un file `.clasp.json` nella cartella `calendar-integration` con questo contenuto (inserisci il tuo Script ID):
+
+   ```json
+   {
+     "scriptId": "IL_TUO_SCRIPT_ID",
+     "rootDir": "dist"
+   }
+   ```
+
+3. **Compilazione e Deployment:**
+
+   ```bash
+   pnpm run deploy
+   ```
+
+   *Questo comando compilerà il codice TypeScript tramite `esbuild` nel file `dist/Code.js` e farà il push su Apps Script tramite clasp.*
+
+4. **Configurazione su Apps Script:**
+   - Vai sul tuo progetto Apps Script nel browser.
+   - Vai su **Impostazioni progetto > Proprietà dello script** e aggiungi una nuova proprietà:
+     - Proprietá: `PAT_TOKEN`
+     - Valore: `[IL_TUO_GITHUB_PAT_TOKEN]` (con permessi `actions:write`)
+   - Seleziona la funzione `setupCalendarTrigger` ed **eseguila una sola volta** manualmente usando il tasto "Esegui" nell'editor di Apps Script. Questo creerà il trigger che si sveglia ai cambiamenti del tuo calendario.
+
+Ora sei pronto! Crea semplicemente un evento su Google Calendar con titolo `Jules: GabryXn/tuo-repo` e metti le istruzioni come descrizione dell'evento.
+
+---
+
+## 🛠️ Risoluzione dei Problemi & Sicurezza
+
+### Log e Debug
+
+Ogni componente è stato progettato per fornire log dettagliati in caso di errore:
+
+- **Controller Locale**: Controlla i log dell'azione "Jules Master Controller" in GitHub Actions. Ti avviserà se un repository non è accessibile o se mancano i permessi nel `PAT_TOKEN`.
+- **Agente Target**: Se Jules non parte dopo aver messo la label, controlla la tab "Actions" nel repository target. Vedrai i motivi dell'eventuale skip (es. configurazione globale disattivata).
+- **Calendario**: Se la chiamata non arriva a GitHub, controlla le **Esecuzioni** su Google Apps Script per vedere i codici di errore HTTP.
+
+### Sicurezza (Best Practices)
+
+- **Prompt Injection**: Gli input provenienti dalle Issue sono chiaramente delimitati per evitare che Jules interpreti il corpo del testo come comandi di sistema.
+- **Minimo Privilegio**: Usa un GitHub PAT con i permessi minimi necessari descritti sopra.
+- **Rotazione Segreti**: Si consiglia di ruotare periodicamente la `JULES_API_KEY` e il `PAT_TOKEN`.
 
 ---
 

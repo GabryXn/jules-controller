@@ -35,19 +35,59 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Check Global Config (Centralized Control)
+        id: check_config
+        run: |
+          echo "🔍 Fetching global configuration from master controller..."
+          
+          # Fetch the config from the master controller repo
+          CONFIG_RAW=$(curl -s --connect-timeout 5 --retry 3 "https://raw.githubusercontent.com/GabryXn/jules-controller/main/jules_config.yml")
+          
+          if [ -z "$CONFIG_RAW" ]; then
+            echo "⚠️  WARNING: Could not fetch global config (empty response or timeout)."
+            echo "Proceeding with default (enabled) for safety, but check connection to GabryXn/jules-controller."
+            CONFIG_JSON='{"features": {"issue_automation": true, "cyclic_automation": true}}'
+          else
+            CONFIG_JSON=$(echo "$CONFIG_RAW" | yq -o=json)
+            echo "✅ Global configuration fetched successfully."
+          fi
+          
+          if [ "${{ github.event_name }}" == "issues" ]; then
+            ENABLED=$(echo "$CONFIG_JSON" | jq -r '.features.issue_automation // true')
+            echo "Checking issue_automation: $ENABLED"
+          else
+            # For workflow_dispatch, the controller already checked, but we store for log consistency
+            ENABLED="true"
+            echo "Workflow triggered via dispatch (controller/manual). Automation is ENABLED."
+          fi
+          
+          if [ "$ENABLED" != "true" ]; then
+            echo "🛑 Automation is DISABLED in global config. Action will stop here."
+          fi
+
+          echo "enabled=$ENABLED" >> $GITHUB_OUTPUT
+
       - name: Invoke Jules (workflow_dispatch)
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && steps.check_config.outputs.enabled == 'true'
         uses: google-labs-code/jules-action@v1.0.0
         with:
           prompt: ${{ inputs.prompt }}
           jules_api_key: ${{ secrets.JULES_API_KEY }}
 
       - name: Invoke Jules (issue trigger)
-        if: github.event_name == 'issues'
+        if: github.event_name == 'issues' && steps.check_config.outputs.enabled == 'true'
         uses: google-labs-code/jules-action@v1.0.0
         with:
           prompt: |
-            Issue #${{ github.event.issue.number }}: ${{ github.event.issue.title }}
-
+            DATABASE_CONTEXT: Lavora su questo repository GitHub.
+            USER_REQUEST_ORIGIN: GitHub Issue #${{ github.event.issue.number }}
+            
+            --- USER REQUEST START ---
+            Title: ${{ github.event.issue.title }}
+            
+            Body:
             ${{ github.event.issue.body }}
+            --- USER REQUEST END ---
+
+            ISTRUZIONI: Analizza la richiesta sopra ed esegui i cambiamenti necessari seguendo le best practice del progetto.
           jules_api_key: ${{ secrets.JULES_API_KEY }}

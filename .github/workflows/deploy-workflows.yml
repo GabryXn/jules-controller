@@ -12,7 +12,14 @@ jobs:
       - name: Checkout controller repository
         uses: actions/checkout@v4
 
+      - name: Check if feature is enabled
+        id: check_config
+        run: |
+          ENABLED=$(yq eval '.features.workflow_deployment' jules_config.yml)
+          echo "enabled=$ENABLED" >> $GITHUB_OUTPUT
+
       - name: Deploy jules_agent.yml and create label
+        if: steps.check_config.outputs.enabled == 'true'
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
@@ -24,6 +31,11 @@ jobs:
 
           # Iterate through all target repos
           gh repo list GabryXn --limit 1000 --no-archived --json nameWithOwner --jq '.[].nameWithOwner' | while read -r REPO; do
+            if [ "$REPO" == "GabryXn/jules-controller" ]; then
+              echo "⏭️ Skipping self (jules-controller)"
+              continue
+            fi
+
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             echo "📦 Processing $REPO"
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

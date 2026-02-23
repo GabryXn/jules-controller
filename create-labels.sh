@@ -10,6 +10,10 @@ echo "========================================================="
 
 # Ottiene tutti i repository e cilca
 gh repo list GabryXn --limit 1000 --no-archived --json nameWithOwner --jq '.[].nameWithOwner' | while read -r REPO; do
+  if [ "$REPO" == "GabryXn/jules-controller" ]; then
+    echo "⏭️  Skipping self (jules-controller)"
+    continue
+  fi
   echo "→ Controllo $REPO"
   
   # Prova a creare la label usando la API di GitHub
