@@ -32,21 +32,25 @@ graph TD
 ## 🚀 Funzionalità Principali
 
 ### 1. Automazione Ciclica Programmata (`controller.yml`)
+
 - **Esecuzione:** Ogni notte alle **04:00 AM**.
 - **Logica:** Legge il file `jules_targets.yml`, itera sui repository specificati e lancia le automazioni definite (es. scansioni di vulnerabilità, refactoring, update documentazione).
 - **Personalizzazione:** Ogni target può avere più automazioni con prompt specifici.
 
 ### 2. Sincronizzazione Universale (`sync-secrets.yml` & `deploy-workflows.yml`)
+
 - **Esecuzione:** Ogni notte alle **03:00 AM**.
-- **Scope:** Agisce su **tutti i repository** (non archiviati) dell'account `GabryXn`.
+- **Scope:** Agisce su **tutti i repository** (sia pubblici che **privati**, non archiviati) dell'account `GabryXn`.
 - **Azioni:**
-    - Iniezione automatica della `JULES_API_KEY`.
-    - Deployment/Aggiornamento del workflow `jules_agent.yml`.
-    - Creazione automatica della label `jules` (colore viola `715cd7`).
+  - Iniezione automatica della `JULES_API_KEY`.
+  - Deployment/Aggiornamento del workflow `jules_agent.yml`.
+  - Creazione automatica della label `jules` (colore viola `715cd7`).
 - **Risultato:** Ogni nuovo repository creato diventa automaticamente "Jules-ready" entro 24 ore.
 
 ### 3. Programmazione via Issue (Remote Access)
-Grazie al workflow deployato in ogni repo, puoi comandare Jules direttamente dalle Issue di GitHub:
+
+Grazie al workflow deployato in ogni repo (pubblico o **privato**), puoi comandare Jules direttamente dalle Issue di GitHub:
+
 1. Crea una Issue in qualsiasi repo.
 2. Descrivi cosa vuoi fare (es. "Aggiungi logica di validazione al form di login").
 3. Aggiungi la label `jules`.
@@ -57,20 +61,25 @@ Grazie al workflow deployato in ogni repo, puoi comandare Jules direttamente dal
 ## 📂 Struttura del Repository
 
 ### `.github/workflows/`
+
 - **`controller.yml`**: Il dispatcher principale per i task pianificati.
 - **`sync-secrets.yml`**: Si assicura che ogni repo abbia la chiave API corretta.
 - **`deploy-workflows.yml`**: Il "distributore" che installa Jules in tutto il tuo ecosistema GitHub.
 
 ### `templates/`
-- **`jules_agent.yml`**: Il workflow "operaio" che viene copiato nei repo target. Utilizza l'azione ufficiale `google-labs-code/jules-invoke@v1`.
+
+- **`jules_agent.yml`**: Il workflow "operaio" che viene copiato nei repo target. Utilizza l'azione ufficiale `google-labs-code/jules-action@v1.0.0`.
 
 ### `jules_targets.yml`
+
 Il file di configurazione per i task ciclici. Contiene:
+
 - Elenco dei repo da monitorare.
 - Elenco delle automazioni (nome + prompt dettagliato).
 - Un template integrato per aggiungere facilmente nuovi target.
 
 ### Script di Utility
+
 - **`create-labels.ps1`**: Script PowerShell per il bootstrap iniziale delle label su tutti i repo (eseguito localmente).
 - **`create-labels.sh`**: Equivalente Bash per sistemi Linux/WSL.
 
