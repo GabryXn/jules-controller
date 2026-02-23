@@ -12,15 +12,15 @@ Il sistema è composto da un controller centrale (questo repo) che "inietta" le 
 graph TD
     subgraph "Jules Controller (Central Hub)"
         A[jules_targets.yml] --> B[.github/workflows/controller.yml]
-        C[.github/workflows/sync-secrets.yml]
-        D[.github/workflows/deploy-workflows.yml]
+        C[.github/workflows/master-setup.yml]
+        D[.github/workflows/auto-config-sync.yml]
     end
 
     subgraph "Target Repositories (Any Repo)"
         B -->|Dispatch| E[.github/workflows/jules_agent.yml]
         C -->|Inject| F[JULES_API_KEY Secret]
-        D -->|Deploy| E
-        D -->|Create| G[Label: jules]
+        C -->|Deploy| E
+        C -->|Create| G[Label: jules]
         H[New Issue + Label: jules] -->|Trigger| E
     end
 
@@ -34,17 +34,18 @@ graph TD
 ### 1. Automazione Ciclica Programmata (`controller.yml`)
 
 - **Esecuzione:** Ogni notte alle **04:00 AM (Rome Time)**.
-- **Logica:** Legge il file `jules_targets.yml`, itera sui repository specificati e lancia le automazioni definite (es. scansioni di vulnerabilità, refactoring, update documentazione).
-- **Personalizzazione:** Ogni target può avere più automazioni con prompt specifici.
+- **Logica:** Legge il file `jules_targets.yml`, itera sui repository specificati e lancia le automazioni definite.
+- **Robustezza**: Valida i token prima di iniziare e fornisce suggerimenti di debug in caso di fallimento del dispatch.
 
-### 2. Sincronizzazione Universale (`sync-secrets.yml` & `deploy-workflows.yml`)
+### 2. Sincronizzazione Universale (`master-setup.yml`)
 
 - **Esecuzione:** Ogni notte alle **03:00 AM (Rome Time)**.
-- **Scope:** Agisce su **tutti i repository** (sia pubblici che **privati**, non archiviati) dell'account `GabryXn`.
-- **Azioni:**
-  - **Setup Automazione (`sync-secrets.yml`):** Iniezione automatica della `JULES_API_KEY` e creazione della label `jules` (colore viola `715cd7`).
-  - **Deployment Workflow (`deploy-workflows.yml`):** Installazione/Aggiornamento del workflow `jules_agent.yml`.
-- **Risultato:** Ogni nuovo repository creato diventa automaticamente "Jules-ready" entro 24 ore.
+- **Scope:** Agisce su **tutti i repository** dell'account `GabryXn`.
+- **Azioni Sequenziali**:
+  1. Iniezione automatica della `JULES_API_KEY`.
+  2. Deployment/Aggiornamento del workflow `jules_agent.yml`.
+  3. Creazione della label `jules` (colore viola `715cd7`).
+- **Vantaggio**: Essendo sequenziale, garantisce che i segreti siano pronti prima dei workflow.
 
 ---
 
@@ -79,8 +80,8 @@ Grazie al workflow deployato in ogni repo (pubblico o **privato**), puoi comanda
 ### `.github/workflows/`
 
 - **`controller.yml`**: Il dispatcher principale per i task pianificati.
-- **`sync-secrets.yml`**: Si assicura che ogni repo abbia la chiave API corretta.
-- **`deploy-workflows.yml`**: Il "distributore" che installa Jules in tutto il tuo ecosistema GitHub.
+- **`master-setup.yml`**: Si assicura che ogni repo abbia la chiave API corretta e i workflow aggiornati (Consolidato).
+- **`auto-config-sync.yml`**: Sincronizza automaticamente gli orari dal file `jules_config.yml`.
 
 ### `templates/`
 
@@ -160,13 +161,16 @@ Ora sei pronto! Crea semplicemente un evento su Google Calendar con titolo `Jule
 
 ## 🛠️ Risoluzione dei Problemi & Sicurezza
 
+### Tabella dei Codici di Errore
+
+| Errore | Causa Probabile | Soluzione |
+| :--- | :--- | :--- |
+| `PAT_TOKEN is invalid` | Token scaduto o revocato | Rigenera il Fine-grained PAT su GitHub e aggiorna il Secret. |
+| `404 Not Found` | Mancanza permessi repo | Assicurati che il PAT abbia accesso ai repository target. |
+| `Could not find workflow` | Setup non completato | Attendi l'esecuzione di `master-setup.yml` o avvialo manualmente. |
+| `JULES_API_KEY missing` | Secret non impostato | Aggiungi `JULES_API_KEY` ai Secret del repository controller. |
+
 ### Log e Debug
-
-Ogni componente è stato progettato per fornire log dettagliati in caso di errore:
-
-- **Controller Locale**: Controlla i log dell'azione "Jules Master Controller" in GitHub Actions. Ti avviserà se un repository non è accessibile o se mancano i permessi nel `PAT_TOKEN`.
-- **Agente Target**: Se Jules non parte dopo aver messo la label, controlla la tab "Actions" nel repository target. Vedrai i motivi dell'eventuale skip (es. configurazione globale disattivata).
-- **Calendario**: Se la chiamata non arriva a GitHub, controlla le **Esecuzioni** su Google Apps Script per vedere i codici di errore HTTP.
 
 ### Sicurezza (Best Practices)
 

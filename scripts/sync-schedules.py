@@ -60,7 +60,7 @@ def main():
     
     # Mapping tra chiavi config e file workflow
     mapping = {
-        'setup_sync_time': ['sync-secrets.yml', 'deploy-workflows.yml'],
+        'setup_sync_time': ['master-setup.yml'],
         'master_controller_time': ['controller.yml']
     }
 

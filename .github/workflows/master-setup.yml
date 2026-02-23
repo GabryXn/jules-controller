@@ -1,38 +1,56 @@
-name: Deploy Jules Workflows to Targets
+name: Jules Universal Setup (Secrets & Workflows)
 
 on:
   schedule:
-    - cron: '0 2 * * *'
+    - cron: '0 2 * * *' # 03:00 Rome Time
   workflow_dispatch:
 
 jobs:
-  deploy:
+  setup:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout controller repository
         uses: actions/checkout@v4
 
-      - name: Check if feature is enabled
+      - name: 🔐 Validate Tokens
+        id: validate_tokens
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+          JULES_API_KEY: ${{ secrets.JULES_API_KEY }}
+        run: |
+          echo "🔍 Checking PAT_TOKEN validity..."
+          if ! gh api user --silent; then
+            echo "❌ ERROR: PAT_TOKEN is invalid or expired. Check repository secrets."
+            exit 1
+          fi
+          echo "✅ PAT_TOKEN is valid."
+
+          echo "🔍 Checking JULES_API_KEY presence..."
+          if [ -z "$JULES_API_KEY" ]; then
+            echo "❌ ERROR: JULES_API_KEY is missing. Check repository secrets."
+            exit 1
+          fi
+          echo "✅ JULES_API_KEY is present."
+
+      - name: Check Global Config
         id: check_config
         run: |
           ENABLED=$(yq eval '.features.workflow_deployment' jules_config.yml)
           echo "enabled=$ENABLED" >> $GITHUB_OUTPUT
 
-      - name: Deploy jules_agent.yml and create label
+      - name: 🚀 Run Sequential Setup
         if: steps.check_config.outputs.enabled == 'true'
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+          JULES_API_KEY: ${{ secrets.JULES_API_KEY }}
         run: |
           TEMPLATE_FILE="templates/jules_agent.yml"
           DEST_PATH=".github/workflows/jules_agent.yml"
-
-          # Read the template content and base64 encode it
           CONTENT=$(base64 -w 0 "$TEMPLATE_FILE")
 
-          # Iterate through all target repos
+          # Get all non-archived repos
           gh repo list GabryXn --limit 1000 --no-archived --json nameWithOwner --jq '.[].nameWithOwner' | while read -r REPO; do
             if [ "$REPO" == "GabryXn/jules-controller" ]; then
-              echo "⏭️ Skipping self (jules-controller)"
               continue
             fi
 
@@ -40,22 +58,33 @@ jobs:
             echo "📦 Processing $REPO"
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-            # 1. Deploy the workflow file
+            # 1. Sync JULES_API_KEY
+            echo "  🔑 Syncing JULES_API_KEY..."
+            gh secret set JULES_API_KEY -R "$REPO" -b "$JULES_API_KEY"
+
+            # 2. Deploy jules_agent.yml
+            echo "  📄 Deploying jules_agent.yml..."
             EXISTING_SHA=$(gh api "repos/$REPO/contents/$DEST_PATH" --jq '.sha' 2>/dev/null || echo "")
 
             if [ -n "$EXISTING_SHA" ]; then
-              echo "  ↻ Updating existing workflow..."
               gh api --method PUT "repos/$REPO/contents/$DEST_PATH" \
                 -f message="chore: update jules_agent.yml from controller" \
                 -f content="$CONTENT" \
-                -f sha="$EXISTING_SHA"
+                -f sha="$EXISTING_SHA" --silent
             else
-              echo "  + Creating new workflow..."
               gh api --method PUT "repos/$REPO/contents/$DEST_PATH" \
                 -f message="chore: add jules_agent.yml from controller" \
-                -f content="$CONTENT"
+                -f content="$CONTENT" --silent
             fi
-            
+
+            # 3. Ensure 'jules' label
+            echo "  🏷️ Ensuring 'jules' label..."
+            gh api --method POST /repos/$REPO/labels \
+              -f name='jules' \
+              -f description='Trigga il Google Jules AI Agent' \
+              -f color='715cd7' \
+              --silent 2>/dev/null || true
+
             echo "  ✅ Done for $REPO"
             echo ""
           done
