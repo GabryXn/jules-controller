@@ -73,6 +73,7 @@ jobs:
         with:
           prompt: ${{ inputs.prompt }}
           jules_api_key: ${{ secrets.JULES_API_KEY }}
+          starting_branch: ${{ github.event.repository.default_branch }}
 
       - name: Invoke Jules (issue trigger)
         if: github.event_name == 'issues' && steps.check_config.outputs.enabled == 'true'
@@ -91,3 +92,19 @@ jobs:
 
             ISTRUZIONI: Analizza la richiesta sopra ed esegui i cambiamenti necessari seguendo le best practice del progetto.
           jules_api_key: ${{ secrets.JULES_API_KEY }}
+          starting_branch: ${{ github.event.repository.default_branch }}
+
+      - name: 📝 Execution Summary
+        if: always() && steps.check_config.outputs.enabled == 'true'
+        run: |
+          echo "### 🤖 Jules Execution Status" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "✅ **Success**: Jules has processed the request." >> $GITHUB_STEP_SUMMARY
+            echo "If changes were needed, a **Pull Request** has been created in this repository." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **Failed**: Something went wrong during Jules execution." >> $GITHUB_STEP_SUMMARY
+            echo "Check the logs of the previous steps for more details." >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Trigger:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** ${{ github.event.repository.default_branch }}" >> $GITHUB_STEP_SUMMARY
