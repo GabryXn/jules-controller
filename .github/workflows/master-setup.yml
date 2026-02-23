@@ -49,13 +49,13 @@ jobs:
           CONTENT=$(base64 -w 0 "$TEMPLATE_FILE")
 
           # Get all non-archived repos
-          gh repo list GabryXn --limit 1000 --no-archived --json nameWithOwner --jq '.[].nameWithOwner' | while read -r REPO; do
+          gh repo list GabryXn --limit 1000 --no-archived --json nameWithOwner,defaultBranch --jq '.[] | "\(.nameWithOwner) \(.defaultBranch)"' | while read -r REPO DEFAULT_BRANCH; do
             if [ "$REPO" == "GabryXn/jules-controller" ]; then
               continue
             fi
 
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "📦 Processing $REPO"
+            echo "📦 Processing $REPO (Default Branch: $DEFAULT_BRANCH)"
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
             # 1. Sync JULES_API_KEY
@@ -84,6 +84,18 @@ jobs:
               -f description='Trigga il Google Jules AI Agent' \
               -f color='715cd7' \
               --silent 2>/dev/null || true
+
+            # 4. Apply Branch Protection
+            echo "  🛡️ Setting up Branch Protection on '$DEFAULT_BRANCH'..."
+            gh api --method PUT "/repos/$REPO/branches/$DEFAULT_BRANCH/protection" \
+              -f required_status_checks='null' \
+              -H "Accept: application/vnd.github.v3+json" \
+              -f enforce_admins=true \
+              -F required_pull_request_reviews='{"dismiss_stale_reviews":true,"require_code_owner_reviews":false,"required_approving_review_count":0}' \
+              -f restrictions='null' \
+              -f allow_force_pushes=false \
+              -f allow_deletions=false \
+              --silent 2>/dev/null || echo "  ⚠️  Could not apply branch protection (check PAT permissions)"
 
             echo "  ✅ Done for $REPO"
             echo ""

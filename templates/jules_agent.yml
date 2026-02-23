@@ -83,7 +83,8 @@ jobs:
             1. Sei un Senior Software Engineer. Agisci con autonomia.
             2. Se il task richiede la creazione o modifica di un file, esegui il cambiamento DIRETTAMENTE.
             3. Crea SEMPRE una Pull Request con le modifiche effettuate.
-            4. Lavora sul branch di default del repository.
+            4. NON EFFETTUARE MAI IL MERGE della Pull Request. Il merge deve essere eseguito solo manualmente dall'utente.
+            5. Lavora sul branch di default del repository.
           jules_api_key: ${{ secrets.JULES_API_KEY }}
           starting_branch: ${{ github.event.repository.default_branch }}
 
