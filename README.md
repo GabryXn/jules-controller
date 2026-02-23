@@ -33,13 +33,13 @@ graph TD
 
 ### 1. Automazione Ciclica Programmata (`controller.yml`)
 
-- **Esecuzione:** Ogni notte alle **04:00 AM**.
+- **Esecuzione:** Ogni notte alle **04:00 AM (Rome Time)**.
 - **Logica:** Legge il file `jules_targets.yml`, itera sui repository specificati e lancia le automazioni definite (es. scansioni di vulnerabilità, refactoring, update documentazione).
 - **Personalizzazione:** Ogni target può avere più automazioni con prompt specifici.
 
 ### 2. Sincronizzazione Universale (`sync-secrets.yml` & `deploy-workflows.yml`)
 
-- **Esecuzione:** Ogni notte alle **03:00 AM**.
+- **Esecuzione:** Ogni notte alle **03:00 AM (Rome Time)**.
 - **Scope:** Agisce su **tutti i repository** (sia pubblici che **privati**, non archiviati) dell'account `GabryXn`.
 - **Azioni:**
   - **Setup Automazione (`sync-secrets.yml`):** Iniezione automatica della `JULES_API_KEY` e creazione della label `jules` (colore viola `715cd7`).

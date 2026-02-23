@@ -1,15 +1,29 @@
-# ⚙️ JULES GLOBAL CONFIGURATION
-# Use this file to enable or disable features across the entire system.
+# ==========================================
+# JULES CONFIGURATION - CONTROL HUB
+# ==========================================
 
+# 1. Feature Switches (Abilitazione Moduli)
+# Imposta su 'true' per attivare o 'false' per disattivare.
 features:
-  # Enable/Disable the nightly cyclic automations (controller.yml)
+  # Esecuzione automazioni cicliche definite in jules_targets.yml (controller.yml)
   cyclic_automation: true
 
-  # Enable/Disable triggering Jules via GitHub Issues with the "jules" label
+  # Risposta alle Issue GitHub con label "jules" (jules_agent.yml)
   issue_automation: true
 
-  # Enable/Disable triggering Jules via Google Calendar events
+  # Trigger da Google Calendar Eventi (calendar-integration)
   calendar_automation: true
 
-  # Enable/Disable the nightly synchronization and deployment of workflows to target repos (deploy-workflows.yml)
+  # Sincronizzazione automatica workflow e secret sui repo target (deploy-workflows.yml)
   workflow_deployment: true
+
+# 2. Scheduling (Orari in formato HH:MM - Fuso Orario di ROMA)
+# I cambiamenti qui aggiorneranno automaticamente i workflow di GitHub.
+schedules:
+  # Sincronizzazione secret e deployment workflow (Default suggerito: 03:00)
+  # Gestito da: sync-secrets.yml e deploy-workflows.yml
+  setup_sync_time: "03:00"
+
+  # Esecuzione del Master Controller ciclico (Default suggerito: 04:00)
+  # Gestito da: controller.yml
+  master_controller_time: "04:00"
