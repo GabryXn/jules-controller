@@ -197,7 +197,20 @@ export function checkAndTriggerJules(e?: any) {
             if (targetRepo) {
                 const diff = Math.abs(event.getStartTime().getTime() - now.getTime());
                 if (diff <= 120000) {
-                    const prompt = event.getDescription() || '';
+                    let prompt = event.getDescription() || '';
+
+                    // --- SANITIZE PROMPT ---
+                    // Remove HTML tags (e.g., <code>, <p>, etc.)
+                    prompt = prompt.replace(/<[^>]*>?/gm, '');
+                    // Decode common HTML entities (like &nbsp;)
+                    prompt = prompt.replace(/&nbsp;/g, ' ')
+                        .replace(/&amp;/g, '&')
+                        .replace(/&lt;/g, '<')
+                        .replace(/&gt;/g, '>')
+                        .replace(/&quot;/g, '"')
+                        .replace(/&#39;/g, "'");
+                    // -----------------------
+
                     console.log(`🤖 Triggering Jules for ${targetRepo}. Event: "${title}"`);
                     const success = triggerJulesOnGithub(targetRepo, prompt);
                     if (success) {
