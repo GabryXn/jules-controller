@@ -6,7 +6,7 @@
 # Imposta su 'true' per attivare o 'false' per disattivare.
 features:
   # Esecuzione automazioni cicliche definite in jules_targets.yml (controller.yml)
-  cyclic_automation: true
+  cyclic_automation: false
 
   # Risposta alle Issue GitHub con label "jules" (jules_agent.yml)
   issue_automation: true
