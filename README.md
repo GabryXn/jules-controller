@@ -42,10 +42,26 @@ graph TD
 - **Esecuzione:** Ogni notte alle **03:00 AM**.
 - **Scope:** Agisce su **tutti i repository** (sia pubblici che **privati**, non archiviati) dell'account `GabryXn`.
 - **Azioni:**
-  - Iniezione automatica della `JULES_API_KEY`.
-  - Deployment/Aggiornamento del workflow `jules_agent.yml`.
-  - Creazione automatica della label `jules` (colore viola `715cd7`).
+  - **Setup Automazione (`sync-secrets.yml`):** Iniezione automatica della `JULES_API_KEY` e creazione della label `jules` (colore viola `715cd7`).
+  - **Deployment Workflow (`deploy-workflows.yml`):** Installazione/Aggiornamento del workflow `jules_agent.yml`.
 - **Risultato:** Ogni nuovo repository creato diventa automaticamente "Jules-ready" entro 24 ore.
+
+---
+
+## ⚙️ Configurazione Iniziale
+
+Per far funzionare il controller, devono essere impostati i seguenti **Repository Secrets** in questo repository (`jules-controller`):
+
+1. **`PAT_TOKEN`**: Un GitHub Personal Access Token (Fine-grained) con permessi di:
+   - `Contents: Read & Write`
+   - `Workflows: Read & Write`
+   - `Secrets: Read & Write`
+   - `Metadata: Read-only`
+2. **`JULES_API_KEY`**: La tua chiave API per accedere a Google Jules.
+
+Una volta impostati i secret, i workflow notturni si occuperanno di configurare tutto l'ecosistema GitHub automaticamente. Non è necessario eseguire script locali.
+
+---
 
 ### 3. Programmazione via Issue (Remote Access)
 

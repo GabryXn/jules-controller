@@ -56,16 +56,6 @@ jobs:
                 -f content="$CONTENT"
             fi
             
-            # 2. Add the 'jules' label
-            echo "  🏷️ Ensuring 'jules' label exists..."
-            gh api --method POST \
-              -H "Accept: application/vnd.github+json" \
-              /repos/$REPO/labels \
-              -f name='jules' \
-              -f description='Trigga il Google Jules AI Agent' \
-              -f color='715cd7' \
-              --silent 2>/dev/null || true
-              
             echo "  ✅ Done for $REPO"
             echo ""
           done
