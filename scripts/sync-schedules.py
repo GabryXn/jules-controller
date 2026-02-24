@@ -1,6 +1,8 @@
 import yaml
 import os
 import re
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 # ==============================================================================
 # JULES SCHEDULE SYNCHRONIZER - Driven by jules_config.yml
@@ -9,15 +11,19 @@ import re
 CONFIG_PATH = "jules_config.yml"
 WORKFLOW_DIR = ".github/workflows"
 
-# Offset Roma (CET = UTC+1). 
-ROME_UTC_OFFSET = 1 
+def get_rome_offset():
+    """Calcola l'offset dinamico di Roma (gestisce automaticamente Ora Solare/Legale)"""
+    rome = ZoneInfo("Europe/Rome")
+    now = datetime.now(rome)
+    # Restituisce l'offset in ore (es. 1 per CET, 2 per CEST)
+    return int(now.utcoffset().total_seconds() / 3600)
 
 def rome_to_utc_cron(time_str):
     """Converte HH:MM (Roma) in cron string '0 H * * *' (UTC)"""
     try:
         hour, minute = map(int, time_str.split(':'))
-        # Calcolo ora UTC
-        utc_hour = (hour - ROME_UTC_OFFSET) % 24
+        # Calcolo ora UTC usando l'offset corrente
+        utc_hour = (hour - get_rome_offset()) % 24
         return f"0 {utc_hour} * * *"
     except Exception as e:
         print(f"ERROR parsing time '{time_str}': {e}")
