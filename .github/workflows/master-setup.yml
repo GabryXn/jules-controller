@@ -43,10 +43,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
           JULES_API_KEY: ${{ secrets.JULES_API_KEY }}
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
         run: |
-          TEMPLATE_FILE="templates/jules_agent.yml"
-          DEST_PATH=".github/workflows/jules_agent.yml"
-          CONTENT=$(base64 -w 0 "$TEMPLATE_FILE")
+          TEMPLATE_AGENT="templates/jules_agent.yml"
+          TEMPLATE_CLASP="templates/clasp_deploy.yml"
+          DEST_AGENT=".github/workflows/jules_agent.yml"
+          DEST_CLASP=".github/workflows/clasp_deploy.yml"
+          
+          AGENT_CONTENT=$(base64 -w 0 "$TEMPLATE_AGENT")
+          CLASP_CONTENT=$(base64 -w 0 "$TEMPLATE_CLASP")
 
           # Get all non-archived repos
           gh repo list GabryXn --limit 1000 --no-archived --json nameWithOwner,defaultBranch --jq '.[] | "\(.nameWithOwner) \(.defaultBranch)"' | while read -r REPO DEFAULT_BRANCH; do
@@ -58,26 +63,51 @@ jobs:
             echo "📦 Processing $REPO (Default Branch: $DEFAULT_BRANCH)"
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-            # 1. Sync JULES_API_KEY
+            # 1. Sync Secrets
             echo "  🔑 Syncing JULES_API_KEY..."
             gh secret set JULES_API_KEY -R "$REPO" -b "$JULES_API_KEY"
 
-            # 2. Deploy jules_agent.yml
-            echo "  📄 Deploying jules_agent.yml..."
-            EXISTING_SHA=$(gh api "repos/$REPO/contents/$DEST_PATH" --jq '.sha' 2>/dev/null || echo "")
-
-            if [ -n "$EXISTING_SHA" ]; then
-              gh api --method PUT "repos/$REPO/contents/$DEST_PATH" \
-                -f message="chore: update jules_agent.yml from controller" \
-                -f content="$CONTENT" \
-                -f sha="$EXISTING_SHA" --silent
-            else
-              gh api --method PUT "repos/$REPO/contents/$DEST_PATH" \
-                -f message="chore: add jules_agent.yml from controller" \
-                -f content="$CONTENT" --silent
+            if [ -n "$CLASPRC_JSON" ]; then
+              echo "  🔑 Syncing CLASPRC_JSON..."
+              gh secret set CLASPRC_JSON -R "$REPO" -b "$CLASPRC_JSON"
             fi
 
-            # 3. Ensure 'jules' label
+            # 2. Deploy jules_agent.yml
+            echo "  📄 Deploying jules_agent.yml..."
+            EXISTING_SHA=$(gh api "repos/$REPO/contents/$DEST_AGENT" --jq '.sha' 2>/dev/null || echo "")
+
+            if [ -n "$EXISTING_SHA" ]; then
+              gh api --method PUT "repos/$REPO/contents/$DEST_AGENT" \
+                -f message="chore: update jules_agent.yml from controller" \
+                -f content="$AGENT_CONTENT" \
+                -f sha="$EXISTING_SHA" --silent
+            else
+              gh api --method PUT "repos/$REPO/contents/$DEST_AGENT" \
+                -f message="chore: add jules_agent.yml from controller" \
+                -f content="$AGENT_CONTENT" --silent
+            fi
+
+            # 3. Detect & Deploy clasp_deploy.yml
+            HAS_CLASP=$(gh api "repos/$REPO/contents/.clasp.json" --silent > /dev/null && echo "true" || echo "false")
+            if [ "$HAS_CLASP" == "true" ]; then
+              echo "  ✨ Clasp project detected! Deploying clasp_deploy.yml..."
+              CLASP_SHA=$(gh api "repos/$REPO/contents/$DEST_CLASP" --jq '.sha' 2>/dev/null || echo "")
+              
+              if [ -n "$CLASP_SHA" ]; then
+                gh api --method PUT "repos/$REPO/contents/$DEST_CLASP" \
+                  -f message="chore: update clasp_deploy.yml from controller" \
+                  -f content="$CLASP_CONTENT" \
+                  -f sha="$CLASP_SHA" --silent
+              else
+                gh api --method PUT "repos/$REPO/contents/$DEST_CLASP" \
+                  -f message="chore: add clasp_deploy.yml from controller" \
+                  -f content="$CLASP_CONTENT" --silent
+              fi
+            else
+              echo "  ⏩ Not a Clasp project. Skipping clasp_deploy.yml."
+            fi
+
+            # 4. Ensure 'jules' label
             echo "  🏷️ Ensuring 'jules' label..."
             gh api --method POST /repos/$REPO/labels \
               -f name='jules' \
@@ -85,7 +115,7 @@ jobs:
               -f color='715cd7' \
               --silent 2>/dev/null || true
 
-            # 4. Apply Branch Protection
+            # 5. Apply Branch Protection
             echo "  🛡️ Setting up Branch Protection on '$DEFAULT_BRANCH'..."
             gh api --method PUT "/repos/$REPO/branches/$DEFAULT_BRANCH/protection" \
               -f required_status_checks='null' \
@@ -96,6 +126,10 @@ jobs:
               -f allow_force_pushes=false \
               -f allow_deletions=false \
               --silent 2>/dev/null || echo "  ⚠️  Could not apply branch protection (check PAT permissions)"
+
+            # 6. Enable Auto-delete head branches
+            echo "  🧹 Enabling 'delete head branches' on merge..."
+            gh repo edit "$REPO" --delete-branch-on-merge --silent || echo "  ⚠️  Could not enable auto-delete head branches"
 
             echo "  ✅ Done for $REPO"
             echo ""

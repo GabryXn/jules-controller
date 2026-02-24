@@ -73,23 +73,21 @@ function fetchGlobalConfig(token: string): string | null {
     return null;
 }
 
-export function triggerJulesOnGithub(targetRepo: string, prompt: string, attempt: number = 1): boolean {
+export function triggerJulesOnGithub(targetRepo: string, prompt: string, configText: string | null, attempt: number = 1): boolean {
     const token = PropertiesService.getScriptProperties().getProperty('PAT_TOKEN');
     if (!token) {
         console.error('PAT_TOKEN is not defined in Script Properties.');
         return false;
     }
 
-    // --- CENTRALIZED CONTROL CHECK ---
-    const configText = fetchGlobalConfig(token);
+    // --- CENTRALIZED CONTROL CHECK (using cached config) ---
     if (configText) {
         if (configText.includes("calendar_automation: false")) {
-            console.warn("🛑 Calendar Automation is DISABLED in global config. Skipping dispatch.");
+            console.warn(`🛑 Calendar Automation is DISABLED in global config. Skipping dispatch for ${targetRepo}.`);
             return false;
         }
-        console.log("✅ Global config check passed (enabled).");
     } else {
-        console.warn("⚠️ Could not fetch global config, proceeding with default (enabled).");
+        console.warn(`⚠️ Global config not provided for ${targetRepo}, proceeding with default (enabled).`);
     }
     // ---------------------------------
 
@@ -128,7 +126,7 @@ export function triggerJulesOnGithub(targetRepo: string, prompt: string, attempt
                 // Retry only on server errors (5xx)
                 console.log('Retrying in 5 seconds...');
                 Utilities.sleep(5000);
-                return triggerJulesOnGithub(targetRepo, prompt, attempt + 1);
+                return triggerJulesOnGithub(targetRepo, prompt, configText, attempt + 1);
             }
             return false;
         }
@@ -137,7 +135,7 @@ export function triggerJulesOnGithub(targetRepo: string, prompt: string, attempt
         if (attempt < 3) {
             console.log('Retrying in 5 seconds...');
             Utilities.sleep(5000);
-            return triggerJulesOnGithub(targetRepo, prompt, attempt + 1);
+            return triggerJulesOnGithub(targetRepo, prompt, configText, attempt + 1);
         }
         return false;
     }
@@ -148,13 +146,54 @@ export function triggerJulesOnGithub(targetRepo: string, prompt: string, attempt
 // ============================================================================
 
 /**
- * Uses Regex to identify events titled "Jules: [repo]" flexibly.
- * Matches: "Jules: user/repo", "Jules : user/repo", " jules: user/repo" (case-insensitive)
+ * Estrae l'elenco dei repository target (o "all") dal titolo dell'evento.
+ * Supporta virgole per targets multipli: "Jules: repo1, repo2 - Descrizione"
  */
-function extractTargetRepo(title: string): string | null {
-    const regex = /^\s*jules\s*:\s*([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+)\s*$/i;
+function extractTargetRepos(title: string): string[] {
+    // Regex che cattura tutto ciò che sta tra "Jules:" e il primo "-" (o la fine del titolo)
+    const regex = /^\s*jules\s*:\s*([^-\s]+(?:[^-]*[^-\s]+)?)(?:\s+-\s+.*)?\s*$/i;
     const match = title.match(regex);
-    return match ? match[1] : null;
+    if (!match) return [];
+
+    const rawTargets = match[1];
+    // Split per virgola, trim degli spazi e lowercase per "all"
+    return rawTargets.split(',')
+        .map(t => t.trim())
+        .filter(t => t.length > 0)
+        .map(t => t.toLowerCase() === 'all' ? 'all' : t);
+}
+
+/**
+ * Recupera l'elenco di tutti i repository dell'account (owner), filtrando quelli archiviati.
+ */
+function fetchAllTargets(token: string): string[] {
+    // visibility=all recupera sia pubblici che privati
+    // affiliation=owner recupera solo i repo dell'utente (non quelli in cui è solo collaboratore)
+    const url = `${GITHUB_API_URL}/user/repos?visibility=all&affiliation=owner&per_page=100`;
+
+    const options: GoogleAppsScript.URL_Fetch.URLFetchRequestOptions = {
+        method: 'get',
+        headers: {
+            Authorization: `token ${token}`,
+            Accept: 'application/vnd.github.v3+json',
+        },
+        muteHttpExceptions: true
+    };
+
+    try {
+        const response = UrlFetchApp.fetch(url, options);
+        if (response.getResponseCode() === 200) {
+            const reposData = JSON.parse(response.getContentText());
+            return reposData
+                .filter((repo: any) => !repo.archived) // Esclude archiviati
+                .map((repo: any) => repo.full_name);  // owner/repo
+        } else {
+            console.error(`🚨 Error fetching user repos. Code: ${response.getResponseCode()}. Body: ${response.getContentText()}`);
+        }
+    } catch (e) {
+        console.error(`❌ Error fetching targets via GitHub API: ${e}`);
+    }
+    return [];
 }
 
 // ============================================================================
@@ -183,26 +222,51 @@ export function checkAndTriggerJules(e?: any) {
 
         const calendar = CalendarApp.getDefaultCalendar();
         const now = new Date();
+        const nowMs = now.getTime();
+
+        const props = PropertiesService.getScriptProperties();
+        const scheduledStr = props.getProperty('SCHEDULED_EVENTS') || '{}';
+        const scheduledEvents = JSON.parse(scheduledStr);
+        let stateChanged = false;
+
+        // --- CACHE GLOBAL CONFIG ---
+        const token = props.getProperty('PAT_TOKEN') || '';
+        const configText = fetchGlobalConfig(token);
+        // ---------------------------
 
         // 2-minute window
-        const startWindow = new Date(now.getTime() - 60000);
-        const endWindow = new Date(now.getTime() + 120000);
+        const startWindow = new Date(nowMs - 60000);
+        const endWindow = new Date(nowMs + 120000);
 
         const events = calendar.getEvents(startWindow, endWindow);
 
-        events.forEach(event => {
-            const title = event.getTitle() || '';
-            const targetRepo = extractTargetRepo(title);
+        // Cache for 'all' targets
+        let cachedAllRepos: string[] | null = null;
 
-            if (targetRepo) {
-                const diff = Math.abs(event.getStartTime().getTime() - now.getTime());
+        events.forEach(event => {
+            const eventId = event.getId();
+            const title = event.getTitle() || '';
+            const targetRepos = extractTargetRepos(title);
+
+            if (targetRepos.length > 0) {
+                const eventStartTime = event.getStartTime().getTime();
+                const diff = Math.abs(eventStartTime - nowMs);
+
+                // Check if already triggered recently (5-minute deduplication)
+                const eventData = scheduledEvents[eventId];
+                const lastTriggered = eventData ? (eventData.lastTriggered || 0) : 0;
+                const minInterval = 5 * 60 * 1000; // 5 minutes
+
+                if (nowMs - lastTriggered < minInterval) {
+                    console.log(`⏩ Skipping event "${title}" (ID: ${eventId}) - Already triggered recently at ${new Date(lastTriggered)}`);
+                    return;
+                }
+
                 if (diff <= 120000) {
                     let prompt = event.getDescription() || '';
 
                     // --- SANITIZE PROMPT ---
-                    // Remove HTML tags (e.g., <code>, <p>, etc.)
                     prompt = prompt.replace(/<[^>]*>?/gm, '');
-                    // Decode common HTML entities (like &nbsp;)
                     prompt = prompt.replace(/&nbsp;/g, ' ')
                         .replace(/&amp;/g, '&')
                         .replace(/&lt;/g, '<')
@@ -211,16 +275,43 @@ export function checkAndTriggerJules(e?: any) {
                         .replace(/&#39;/g, "'");
                     // -----------------------
 
-                    console.log(`🤖 Triggering Jules for ${targetRepo}. Event: "${title}"`);
-                    const success = triggerJulesOnGithub(targetRepo, prompt);
-                    if (success) {
-                        console.log(`✨ Successfully initiated dispatch for ${targetRepo}`);
-                    } else {
-                        console.error(`🚨 FAILED to initiate dispatch for ${targetRepo}. Check logs above for details.`);
+                    console.log(`🤖 Triggering Jules for targets: ${targetRepos.join(', ')}. Event: "${title}"`);
+
+                    let eventTriggered = false;
+                    targetRepos.forEach(target => {
+                        if (target === 'all') {
+                            if (!cachedAllRepos) {
+                                cachedAllRepos = fetchAllTargets(token);
+                            }
+                            console.log(`🌍 Triggering Jules for ALL managed repositories: ${cachedAllRepos.join(', ')}`);
+                            cachedAllRepos.forEach(repo => {
+                                if (triggerJulesOnGithub(repo, prompt, configText)) eventTriggered = true;
+                            });
+                        } else {
+                            const success = triggerJulesOnGithub(target, prompt, configText);
+                            if (success) {
+                                console.log(`✨ Successfully initiated dispatch for ${target}`);
+                                eventTriggered = true;
+                            } else {
+                                console.error(`🚨 FAILED to initiate dispatch for ${target}.`);
+                            }
+                        }
+                    });
+
+                    if (eventTriggered) {
+                        if (!scheduledEvents[eventId]) {
+                            scheduledEvents[eventId] = { time: eventStartTime, checksum: generateEventChecksum(event) };
+                        }
+                        scheduledEvents[eventId].lastTriggered = nowMs;
+                        stateChanged = true;
                     }
                 }
             }
         });
+
+        if (stateChanged) {
+            props.setProperty('SCHEDULED_EVENTS', JSON.stringify(scheduledEvents));
+        }
     } catch (e: any) {
         console.error(`Error in checkAndTriggerJules: ${e.message}`);
     } finally {
@@ -271,7 +362,7 @@ export function processCalendarEvents() {
 
         events.forEach(event => {
             const title = event.getTitle() || '';
-            if (extractTargetRepo(title)) {
+            if (extractTargetRepos(title).length > 0) {
                 activeJulesEvents.set(event.getId(), event);
             }
         });
@@ -301,7 +392,8 @@ export function processCalendarEvents() {
                 scheduledEvents[eventId] = {
                     time: newStartTime.getTime(),
                     checksum: currentChecksum,
-                    triggerId: newTriggerId
+                    triggerId: newTriggerId,
+                    lastTriggered: scheduledData.lastTriggered // Preserve lastTriggered
                 };
                 stateChanged = true;
             }

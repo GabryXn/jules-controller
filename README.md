@@ -16,7 +16,8 @@
   - [5. Controllo Centralizzato](#5-controllo-centralizzato-jules_configyml)
   - [6. Auto-Sync degli Orari](#6-auto-sync-degli-orari-auto-config-syncyml)
   - [7. Branch Protection Automatica](#7-branch-protection-automatica)
-  - [8. Prompt Library](#8-prompt-library-promptsmd)
+  - [8. Deploy Universale Clasp](#8-deploy-universale-clasp-clasp_deployyml)
+  - [9. Prompt Library](#9-prompt-library-promptsmd)
 - [Configurazione Iniziale](#-configurazione-iniziale)
 - [Struttura del Repository](#-struttura-del-repository)
 - [Installazione Calendar Integration](#-installazione-calendar-integration)
@@ -110,6 +111,7 @@ Il workflow che garantisce che **ogni repository** dell'account sia sempre allin
 2. 📄 **Deployment `jules_agent.yml`**: Copia l'ultima versione del template agent nel percorso `.github/workflows/`.
 3. 🏷️ **Creazione Label `jules`**: Crea (o verifica l'esistenza) della label viola (`#715cd7`) per il trigger via Issue.
 4. 🛡️ **Branch Protection**: Configura automaticamente la protezione del branch di default (vedi [sezione dedicata](#7-branch-protection-automatica)).
+5. 🧹 **Auto-delete Branches**: Abilita l'eliminazione automatica dei branch una volta mergiati.
 
 **Vantaggio**: L'esecuzione sequenziale garantisce che i segreti siano pronti prima del deployment dei workflow, eliminando ogni rischio di race condition.
 
@@ -207,12 +209,36 @@ Il workflow `master-setup.yml` configura automaticamente la protezione del branc
 - ❌ **Nessuna cancellazione** del branch principale.
 - ✅ **Tutte le modifiche passano tramite Pull Request**, richiedendo il merge manuale da parte dell'utente.
 - ✅ **Enforce Admins**: La protezione si applica anche agli amministratori del repository.
+- ✅ **Auto-delete Branch**: Rimuove automaticamente i branch head dopo il merge delle Pull Request.
 
 **Nota**: La protezione viene applicata ad ogni esecuzione del Setup Universale, garantendo che nuovi repository vengano protetti automaticamente.
 
 ---
 
-### 8. Prompt Library (`PROMPTS.md`)
+### 8. Deploy Universale Clasp (`clasp_deploy.yml`)
+
+Per i repository che utilizzano Google Apps Script con TypeScript e Vite/Esbuild, Jules Controller automatizza il build e il push su Apps Script ogni volta che viene fatto un merge sul branch principale.
+
+#### Come Funziona
+
+1. Il Setup Universale rileva la presenza di un file `.clasp.json` nella root del repository target.
+2. Inietta il workflow `clasp_deploy.yml` che gestisce l'installazione delle dipendenze (npm/pnpm/yarn), il build e il push.
+3. Sincronizza il segreto `CLASPRC_JSON` per permettere l'autenticazione headless.
+
+#### Configurazione Credenziali
+
+Per abilitare il deploy automatico, devi fornire le tue credenziali Clasp al Controller:
+
+1. Trova il file delle credenziali sul tuo computer (solitamente `~/.clasprc.json`).
+2. Copia l'intero contenuto JSON.
+3. Vai nei **Settings → Secrets → Actions** di questo repository (`jules-controller`).
+4. Aggiungi un nuovo secret chiamato **`CLASPRC_JSON`** e incolla il contenuto.
+
+Il Setup Universale si occuperà di distribuire questa chiave in modo sicuro a tutti i repository Clasp rilevati.
+
+---
+
+### 9. Prompt Library (`PROMPTS.md`)
 
 Una collezione di prompt pre-ottimizzati e testati per le automazioni più comuni. Disponibile nel file `PROMPTS.md` alla radice del repository.
 
@@ -254,7 +280,7 @@ Una volta completato, i workflow notturni si occuperanno di mantenere tutto sinc
 
 ## 📂 Struttura del Repository
 
-```
+```text
 jules-controller/
 ├── .github/workflows/
 │   ├── controller.yml          # Dispatcher ciclico notturno
