@@ -53,8 +53,8 @@ jobs:
           AGENT_CONTENT=$(base64 -w 0 "$TEMPLATE_AGENT")
           CLASP_CONTENT=$(base64 -w 0 "$TEMPLATE_CLASP")
 
-          # Get all non-archived repos owned by the user
-          gh api --paginate /user/repos?affiliation=owner | jq -r '.[] | select(.archived == false) | "\(.full_name) \(.default_branch)"' | while read -r REPO DEFAULT_BRANCH; do
+          # Get all non-archived repos across all affiliations (owner, collaborator, organization_member)
+          gh api --paginate "/user/repos?affiliation=owner,collaborator,organization_member&per_page=100" | jq -r '.[] | select(.archived == false) | "\(.full_name) \(.default_branch // "null")"' | while read -r REPO DEFAULT_BRANCH; do
             if [ "$REPO" == "$GITHUB_REPOSITORY" ]; then
               continue
             fi
@@ -73,59 +73,75 @@ jobs:
             fi
 
             # 2. Deploy jules_agent.yml
-            echo "  📄 Deploying jules_agent.yml..."
-            EXISTING_SHA=$(gh api "repos/$REPO/contents/$DEST_AGENT" --jq '.sha' 2>/dev/null || echo "")
+            if [ "$DEFAULT_BRANCH" != "null" ]; then
+              echo "  📄 Deploying jules_agent.yml..."
+              EXISTING_SHA=$(gh api "repos/$REPO/contents/$DEST_AGENT" --jq '.sha' 2>/dev/null || echo "")
 
-            if [ -n "$EXISTING_SHA" ]; then
-              gh api --method PUT "repos/$REPO/contents/$DEST_AGENT" \
-                -f message="chore: update jules_agent.yml from controller" \
-                -f content="$AGENT_CONTENT" \
-                -f sha="$EXISTING_SHA" --silent
+              if [ -n "$EXISTING_SHA" ]; then
+                gh api --method PUT "repos/$REPO/contents/$DEST_AGENT" \
+                  -f message="chore: update jules_agent.yml from controller" \
+                  -f content="$AGENT_CONTENT" \
+                  -f sha="$EXISTING_SHA" --silent
+              else
+                gh api --method PUT "repos/$REPO/contents/$DEST_AGENT" \
+                  -f message="chore: add jules_agent.yml from controller" \
+                  -f content="$AGENT_CONTENT" --silent
+              fi
             else
-              gh api --method PUT "repos/$REPO/contents/$DEST_AGENT" \
-                -f message="chore: add jules_agent.yml from controller" \
-                -f content="$AGENT_CONTENT" --silent
+              echo "  ⏩ Default branch not found (empty repo?). Skipping jules_agent.yml deployment."
             fi
 
             # 3. Detect & Deploy clasp_deploy.yml
-            HAS_CLASP=$(gh api "repos/$REPO/contents/.clasp.json" --silent > /dev/null && echo "true" || echo "false")
-            if [ "$HAS_CLASP" == "true" ]; then
-              echo "  ✨ Clasp project detected! Deploying clasp_deploy.yml..."
-              CLASP_SHA=$(gh api "repos/$REPO/contents/$DEST_CLASP" --jq '.sha' 2>/dev/null || echo "")
-              
-              if [ -n "$CLASP_SHA" ]; then
-                gh api --method PUT "repos/$REPO/contents/$DEST_CLASP" \
-                  -f message="chore: update clasp_deploy.yml from controller" \
-                  -f content="$CLASP_CONTENT" \
-                  -f sha="$CLASP_SHA" --silent
+            if [ "$DEFAULT_BRANCH" != "null" ]; then
+              HAS_CLASP=$(gh api "repos/$REPO/contents/.clasp.json" --silent > /dev/null && echo "true" || echo "false")
+              if [ "$HAS_CLASP" == "true" ]; then
+                echo "  ✨ Clasp project detected! Deploying clasp_deploy.yml..."
+                CLASP_SHA=$(gh api "repos/$REPO/contents/$DEST_CLASP" --jq '.sha' 2>/dev/null || echo "")
+
+                if [ -n "$CLASP_SHA" ]; then
+                  gh api --method PUT "repos/$REPO/contents/$DEST_CLASP" \
+                    -f message="chore: update clasp_deploy.yml from controller" \
+                    -f content="$CLASP_CONTENT" \
+                    -f sha="$CLASP_SHA" --silent
+                else
+                  gh api --method PUT "repos/$REPO/contents/$DEST_CLASP" \
+                    -f message="chore: add clasp_deploy.yml from controller" \
+                    -f content="$CLASP_CONTENT" --silent
+                fi
               else
-                gh api --method PUT "repos/$REPO/contents/$DEST_CLASP" \
-                  -f message="chore: add clasp_deploy.yml from controller" \
-                  -f content="$CLASP_CONTENT" --silent
+                echo "  ⏩ Not a Clasp project. Skipping clasp_deploy.yml."
               fi
             else
-              echo "  ⏩ Not a Clasp project. Skipping clasp_deploy.yml."
+               echo "  ⏩ Default branch not found. Skipping clasp_deploy.yml detection."
             fi
 
-            # 4. Ensure 'jules' label
+            # 4. Ensure 'jules' label (POST then PATCH to ensure color/desc)
             echo "  🏷️ Ensuring 'jules' label..."
             gh api --method POST /repos/$REPO/labels \
               -f name='jules' \
               -f description='Trigga il Google Jules AI Agent' \
-              -f color='6b46c1' \
+              -f color='6B46C1' \
+              --silent 2>/dev/null || \
+            gh api --method PATCH /repos/$REPO/labels/jules \
+              -f description='Trigga il Google Jules AI Agent' \
+              -f color='6B46C1' \
               --silent 2>/dev/null || true
 
             # 5. Apply Branch Protection
-            echo "  🛡️ Setting up Branch Protection on '$DEFAULT_BRANCH'..."
-            gh api --method PUT "/repos/$REPO/branches/$DEFAULT_BRANCH/protection" \
-              -f required_status_checks='null' \
-              -H "Accept: application/vnd.github.v3+json" \
-              -f enforce_admins=true \
-              -F required_pull_request_reviews='{"dismiss_stale_reviews":true,"require_code_owner_reviews":false,"required_approving_review_count":0}' \
-              -f restrictions='null' \
-              -f allow_force_pushes=false \
-              -f allow_deletions=false \
-              --silent 2>/dev/null || echo "  ⚠️  Could not apply branch protection (check PAT permissions)"
+            if [ "$DEFAULT_BRANCH" != "null" ]; then
+              echo "  🛡️ Setting up Branch Protection on '$DEFAULT_BRANCH'..."
+              gh api --method PUT "/repos/$REPO/branches/$DEFAULT_BRANCH/protection" \
+                -f required_status_checks='null' \
+                -H "Accept: application/vnd.github.v3+json" \
+                -f enforce_admins=true \
+                -F required_pull_request_reviews='{"dismiss_stale_reviews":true,"require_code_owner_reviews":false,"required_approving_review_count":0}' \
+                -f restrictions='null' \
+                -f allow_force_pushes=false \
+                -f allow_deletions=false \
+                --silent 2>/dev/null || echo "  ⚠️  Could not apply branch protection (check PAT permissions)"
+            else
+              echo "  ⏩ Default branch not found. Skipping Branch Protection."
+            fi
 
             # 6. Enable Auto-delete head branches
             echo "  🧹 Enabling 'delete head branches' on merge..."
