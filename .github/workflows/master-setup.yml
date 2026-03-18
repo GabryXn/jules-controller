@@ -53,9 +53,9 @@ jobs:
           AGENT_CONTENT=$(base64 -w 0 "$TEMPLATE_AGENT")
           CLASP_CONTENT=$(base64 -w 0 "$TEMPLATE_CLASP")
 
-          # Get all non-archived repos
-          gh repo list GabryXn --limit 1000 --no-archived --json nameWithOwner,defaultBranch --jq '.[] | "\(.nameWithOwner) \(.defaultBranch)"' | while read -r REPO DEFAULT_BRANCH; do
-            if [ "$REPO" == "GabryXn/jules-controller" ]; then
+          # Get all non-archived repos owned by the user
+          gh api --paginate /user/repos?affiliation=owner | jq -r '.[] | select(.archived == false) | "\(.full_name) \(.default_branch)"' | while read -r REPO DEFAULT_BRANCH; do
+            if [ "$REPO" == "$GITHUB_REPOSITORY" ]; then
               continue
             fi
 
@@ -112,7 +112,7 @@ jobs:
             gh api --method POST /repos/$REPO/labels \
               -f name='jules' \
               -f description='Trigga il Google Jules AI Agent' \
-              -f color='715cd7' \
+              -f color='6b46c1' \
               --silent 2>/dev/null || true
 
             # 5. Apply Branch Protection
