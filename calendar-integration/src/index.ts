@@ -150,8 +150,8 @@ export function triggerJulesOnGithub(targetRepo: string, prompt: string, configT
  * Supporta virgole per targets multipli: "Jules: repo1, repo2 - Descrizione"
  */
 function extractTargetRepos(title: string): string[] {
-    // Regex che cattura tutto ciò che sta tra "Jules:" e il primo "-" (o la fine del titolo)
-    const regex = /^\s*jules\s*:\s*([^-\s]+(?:[^-]*[^-\s]+)?)(?:\s+-\s+.*)?\s*$/i;
+    // Regex che cattura tutto ciò che sta tra "Jules:" e il primo spazio-trattino-spazio " - " (o la fine del titolo)
+    const regex = /^\s*jules\s*:\s*(.+?)(?:\s+-\s+.*)?\s*$/i;
     const match = title.match(regex);
     if (!match) return [];
 
