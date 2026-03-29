@@ -2,7 +2,7 @@ name: Jules Universal Setup (Secrets & Workflows)
 
 on:
   schedule:
-    - cron: '0 2 * * *' # 03:00 Rome Time
+    - cron: '0 1 * * *' # 03:00 Rome Time
   workflow_dispatch:
 
 jobs:
