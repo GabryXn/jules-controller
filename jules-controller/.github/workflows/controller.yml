@@ -1,0 +1,95 @@
+name: Jules Master Controller
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  dispatch-agents:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🔐 Validate Tokens
+        id: validate_tokens
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+          JULES_API_KEY: ${{ secrets.JULES_API_KEY }}
+        run: |
+          echo "🔍 Checking PAT_TOKEN validity..."
+          if ! gh api user --silent; then
+            echo "❌ ERROR: PAT_TOKEN is invalid or expired. Operation aborted."
+            exit 1
+          fi
+          echo "🔍 Checking JULES_API_KEY presence..."
+          if [ -z "$JULES_API_KEY" ]; then
+            echo "❌ ERROR: JULES_API_KEY is missing. Operation aborted."
+            exit 1
+          fi
+          echo "✅ All tokens validated."
+
+      - name: Check if feature is enabled
+        id: check_config
+        run: |
+          ENABLED=$(yq eval '.features.cyclic_automation' jules_config.yml)
+          echo "enabled=$ENABLED" >> $GITHUB_OUTPUT
+
+      - name: Run Jules on all targets
+        if: steps.check_config.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+          JULES_API_KEY: ${{ secrets.JULES_API_KEY }}
+        run: |
+          echo "🚀 Starting Jules dispatch for all targets..."
+          
+          # Check for required tools
+          for tool in yq jq gh; do
+            if ! command -v $tool &> /dev/null; then
+              echo "❌ ERROR: Required tool '$tool' is not installed."
+              exit 1
+            fi
+          done
+
+          # Parse jules_targets.yml
+          yq -o=json jules_targets.yml | jq -c '.targets[]' | while read -r target; do
+            REPO=$(echo "$target" | jq -r '.repo')
+            
+            if [ -z "$REPO" ] || [ "$REPO" == "null" ]; then
+              echo "⚠️  Skipping invalid target entry."
+              continue
+            fi
+
+            echo "📂 Processing repository: $REPO"
+
+            echo "$target" | jq -c '.automations[]' | while read -r automation; do
+              NAME=$(echo "$automation" | jq -r '.name')
+              PROMPT=$(echo "$automation" | jq -r '.prompt')
+
+              if [ -z "$NAME" ] || [ "$NAME" == "null" ]; then
+                echo "  ⚠️  Skipping invalid automation in $REPO"
+                continue
+              fi
+
+              echo "  🤖 Triggering [$NAME]..."
+              
+              # Dispatch and handle errors
+              DISPATCH_OUTPUT=$(gh workflow run jules_agent.yml -R "$REPO" -f prompt="$PROMPT" 2>&1)
+              DISPATCH_STATUS=$?
+
+              if [ $DISPATCH_STATUS -eq 0 ]; then
+                echo "  ✅ Successfully dispatched [$NAME] to $REPO"
+              else
+                echo "  🚨 FAILED to dispatch [$NAME] to $REPO"
+                echo "     Error details: $DISPATCH_OUTPUT"
+                if [[ "$DISPATCH_OUTPUT" == *"Could not find"* ]]; then
+                  echo "     💡 TIP: Verify that '.github/workflows/jules_agent.yml' exists in $REPO"
+                elif [[ "$DISPATCH_OUTPUT" == *"404"* ]]; then
+                  echo "     💡 TIP: Check if PAT_TOKEN has access to $REPO"
+                fi
+              fi
+            done
+            echo "---------------------------------------"
+          done
+          echo "🏁 All dispatches completed."

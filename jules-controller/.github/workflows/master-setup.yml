@@ -1,0 +1,148 @@
+name: Jules Universal Setup (Secrets & Workflows)
+
+on:
+  schedule:
+    - cron: '0 2 * * *' # 03:00 Rome Time
+  workflow_dispatch:
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout controller repository
+        uses: actions/checkout@v4
+
+      - name: 🔐 Validate Tokens
+        id: validate_tokens
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+          JULES_API_KEY: ${{ secrets.JULES_API_KEY }}
+        run: |
+          echo "🔍 Checking PAT_TOKEN validity..."
+          if ! gh api user --silent; then
+            echo "❌ ERROR: PAT_TOKEN is invalid or expired. Check repository secrets."
+            exit 1
+          fi
+          echo "✅ PAT_TOKEN is valid."
+
+          echo "🔍 Checking JULES_API_KEY presence..."
+          if [ -z "$JULES_API_KEY" ]; then
+            echo "❌ ERROR: JULES_API_KEY is missing. Check repository secrets."
+            exit 1
+          fi
+          echo "✅ JULES_API_KEY is present."
+
+      - name: Check Global Config
+        id: check_config
+        run: |
+          ENABLED=$(yq eval '.features.workflow_deployment' jules_config.yml)
+          echo "enabled=$ENABLED" >> $GITHUB_OUTPUT
+
+      - name: 🚀 Run Sequential Setup
+        if: steps.check_config.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+          JULES_API_KEY: ${{ secrets.JULES_API_KEY }}
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          TEMPLATE_AGENT="templates/jules_agent.yml"
+          TEMPLATE_CLASP="templates/clasp_deploy.yml"
+          DEST_AGENT=".github/workflows/jules_agent.yml"
+          DEST_CLASP=".github/workflows/clasp_deploy.yml"
+          
+          AGENT_CONTENT=$(base64 -w 0 "$TEMPLATE_AGENT")
+          CLASP_CONTENT=$(base64 -w 0 "$TEMPLATE_CLASP")
+
+          # Get all non-archived repos where the user has push access (owner or collaborator)
+          echo "🔍 Fetching repository list..."
+          gh api --paginate "/user/repos?per_page=100" | jq -r '.[] | select(.archived == false and .permissions.push == true) | "\(.full_name) \(.default_branch)"' > repos_list.txt
+
+          while read -r REPO DEFAULT_BRANCH; do
+            if [ "$REPO" == "$GITHUB_REPOSITORY" ]; then
+              continue
+            fi
+
+            # Wrap in a subshell to ensure errors in one repo don't stop the loop
+            (
+              echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+              echo "📦 Processing $REPO (Default Branch: $DEFAULT_BRANCH)"
+              echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+              # 1. Sync Secrets
+              echo "  🔑 Syncing JULES_API_KEY..."
+              gh secret set JULES_API_KEY -R "$REPO" -b "$JULES_API_KEY" || echo "  ⚠️  Failed to set JULES_API_KEY"
+
+              if [ -n "$CLASPRC_JSON" ]; then
+                echo "  🔑 Syncing CLASPRC_JSON..."
+                gh secret set CLASPRC_JSON -R "$REPO" -b "$CLASPRC_JSON" || echo "  ⚠️  Failed to set CLASPRC_JSON"
+              fi
+
+              # 2. Deploy jules_agent.yml
+              echo "  📄 Deploying jules_agent.yml..."
+              EXISTING_SHA=$(gh api "repos/$REPO/contents/$DEST_AGENT" --jq '.sha' 2>/dev/null || echo "")
+
+              if [ -n "$EXISTING_SHA" ]; then
+                gh api --method PUT "repos/$REPO/contents/$DEST_AGENT" \
+                  -f message="chore: update jules_agent.yml from controller" \
+                  -f content="$AGENT_CONTENT" \
+                  -f sha="$EXISTING_SHA" --silent || echo "  ⚠️  Failed to update jules_agent.yml"
+              else
+                gh api --method PUT "repos/$REPO/contents/$DEST_AGENT" \
+                  -f message="chore: add jules_agent.yml from controller" \
+                  -f content="$AGENT_CONTENT" --silent || echo "  ⚠️  Failed to add jules_agent.yml"
+              fi
+
+              # 3. Detect & Deploy clasp_deploy.yml
+              HAS_CLASP=$(gh api "repos/$REPO/contents/.clasp.json" --silent > /dev/null && echo "true" || echo "false")
+              if [ "$HAS_CLASP" == "true" ]; then
+                echo "  ✨ Clasp project detected! Deploying clasp_deploy.yml..."
+                CLASP_SHA=$(gh api "repos/$REPO/contents/$DEST_CLASP" --jq '.sha' 2>/dev/null || echo "")
+
+                if [ -n "$CLASP_SHA" ]; then
+                  gh api --method PUT "repos/$REPO/contents/$DEST_CLASP" \
+                    -f message="chore: update clasp_deploy.yml from controller" \
+                    -f content="$CLASP_CONTENT" \
+                    -f sha="$CLASP_SHA" --silent || echo "  ⚠️  Failed to update clasp_deploy.yml"
+                else
+                  gh api --method PUT "repos/$REPO/contents/$DEST_CLASP" \
+                    -f message="chore: add clasp_deploy.yml from controller" \
+                    -f content="$CLASP_CONTENT" --silent || echo "  ⚠️  Failed to add clasp_deploy.yml"
+                fi
+              else
+                echo "  ⏩ Not a Clasp project. Skipping clasp_deploy.yml."
+              fi
+
+              # 4. Ensure 'jules' label (POST then PATCH to ensure color/description)
+              echo "  🏷️ Ensuring 'jules' label..."
+              gh api --method POST /repos/$REPO/labels \
+                -f name='jules' \
+                -f description='Trigga il Google Jules AI Agent' \
+                -f color='6B46C1' --silent 2>/dev/null || \
+              gh api --method PATCH /repos/$REPO/labels/jules \
+                -f description='Trigga il Google Jules AI Agent' \
+                -f color='6B46C1' --silent || echo "  ⚠️  Failed to sync 'jules' label"
+
+              # 5. Apply Branch Protection (Only if default_branch is not null/empty)
+              if [ -n "$DEFAULT_BRANCH" ] && [ "$DEFAULT_BRANCH" != "null" ]; then
+                echo "  🛡️ Setting up Branch Protection on '$DEFAULT_BRANCH'..."
+                gh api --method PUT "/repos/$REPO/branches/$DEFAULT_BRANCH/protection" \
+                  -f required_status_checks='null' \
+                  -H "Accept: application/vnd.github.v3+json" \
+                  -f enforce_admins=true \
+                  -F required_pull_request_reviews='{"dismiss_stale_reviews":true,"require_code_owner_reviews":false,"required_approving_review_count":0}' \
+                  -f restrictions='null' \
+                  -f allow_force_pushes=false \
+                  -f allow_deletions=false \
+                  --silent 2>/dev/null || echo "  ⚠️  Could not apply branch protection (check PAT permissions)"
+              else
+                echo "  ⏩ Skipping branch protection (empty repository or no default branch)."
+              fi
+
+              # 6. Enable Auto-delete head branches
+              echo "  🧹 Enabling 'delete head branches' on merge..."
+              gh repo edit "$REPO" --delete-branch-on-merge --silent || echo "  ⚠️  Could not enable auto-delete head branches"
+
+              echo "  ✅ Done for $REPO"
+            ) || echo "❌ Fatal error processing $REPO"
+            echo ""
+          done < repos_list.txt

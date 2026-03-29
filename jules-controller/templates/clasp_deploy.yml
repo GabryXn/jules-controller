@@ -1,0 +1,78 @@
+name: Clasp Auto-Deploy
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'src/**'
+      - 'package.json'
+      - 'tsconfig.json'
+      - '.clasp.json'
+      - 'scripts/**'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 🛠️ Setup Package Manager
+        id: setup-pm
+        run: |
+          if [ -f "pnpm-lock.yaml" ]; then
+            echo "pm=pnpm" >> $GITHUB_OUTPUT
+            npm install -g pnpm
+          elif [ -f "yarn.lock" ]; then
+            echo "pm=yarn" >> $GITHUB_OUTPUT
+          else
+            echo "pm=npm" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 📦 Install Dependencies
+        run: |
+          if [ "${{ steps.setup-pm.outputs.pm }}" == "pnpm" ]; then
+            pnpm install
+          elif [ "${{ steps.setup-pm.outputs.pm }}" == "yarn" ]; then
+            yarn install
+          else
+            npm install
+          fi
+
+      - name: 🚀 Build Project
+        run: |
+          if [ "${{ steps.setup-pm.outputs.pm }}" == "pnpm" ]; then
+            pnpm run build
+          elif [ "${{ steps.setup-pm.outputs.pm }}" == "yarn" ]; then
+            yarn run build
+          else
+            npm run build
+          fi
+
+      - name: 🔐 Configure Clasp
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          if [ -z "$CLASPRC_JSON" ]; then
+            echo "❌ ERROR: CLASPRC_JSON secret is missing."
+            exit 1
+          fi
+          echo "$CLASPRC_JSON" > ~/.clasprc.json
+
+      - name: 📤 Push to Apps Script
+        run: |
+          if [ "${{ steps.setup-pm.outputs.pm }}" == "pnpm" ]; then
+            pnpm exec clasp push -f
+          elif [ "${{ steps.setup-pm.outputs.pm }}" == "yarn" ]; then
+            yarn clasp push -f
+          else
+            npx @google/clasp push -f
+          fi
