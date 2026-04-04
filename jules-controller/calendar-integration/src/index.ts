@@ -246,6 +246,7 @@ export function checkAndTriggerJules(e?: any) {
 
         events.forEach(event => {
             const eventId = event.getId();
+            const compositeKey = eventId + '_' + event.getStartTime().getTime(); // unique per occurrence
             const title = event.getTitle() || '';
             const targetRepos = extractTargetRepos(title);
 
@@ -254,12 +255,12 @@ export function checkAndTriggerJules(e?: any) {
                 const diff = Math.abs(eventStartTime - nowMs);
 
                 // Check if already triggered recently (5-minute deduplication)
-                const eventData = scheduledEvents[eventId];
+                const eventData = scheduledEvents[compositeKey]; // ← use compositeKey
                 const lastTriggered = eventData ? (eventData.lastTriggered || 0) : 0;
                 const minInterval = 5 * 60 * 1000; // 5 minutes
 
                 if (nowMs - lastTriggered < minInterval) {
-                    console.log(`⏩ Skipping event "${title}" (ID: ${eventId}) - Already triggered recently at ${new Date(lastTriggered)}`);
+                    console.log(`⏩ Skipping event "${title}" (key: ${compositeKey}) - Already triggered recently at ${new Date(lastTriggered)}`);
                     return;
                 }
 
@@ -300,10 +301,10 @@ export function checkAndTriggerJules(e?: any) {
                     });
 
                     if (eventTriggered) {
-                        if (!scheduledEvents[eventId]) {
-                            scheduledEvents[eventId] = { time: eventStartTime, checksum: generateEventChecksum(event) };
+                        if (!scheduledEvents[compositeKey]) {
+                            scheduledEvents[compositeKey] = { time: eventStartTime, checksum: generateEventChecksum(event) };
                         }
-                        scheduledEvents[eventId].lastTriggered = nowMs;
+                        scheduledEvents[compositeKey].lastTriggered = nowMs;
                         stateChanged = true;
                     }
                 }
