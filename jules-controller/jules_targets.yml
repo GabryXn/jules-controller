@@ -74,6 +74,7 @@ targets:
 #  - repo: "<tuo-username>/<nome-repository>"
 #    automations:
 #      - name: "<nome-automazione>"
+#        enabled: false   # Imposta a false per disabilitare temporaneamente
 #        prompt: |
 #          <Scrivi qui cosa vuoi che Jules faccia.
 #          Puoi andare a capo e scrivere istruzioni dettagliate.

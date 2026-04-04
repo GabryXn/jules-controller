@@ -2,7 +2,7 @@ name: Jules Master Controller
 
 on:
   schedule:
-    - cron: '0 3 * * *'
+    - cron: '0 2 * * *'
   workflow_dispatch:
 
 jobs:
@@ -69,6 +69,12 @@ jobs:
 
               if [ -z "$NAME" ] || [ "$NAME" == "null" ]; then
                 echo "  ⚠️  Skipping invalid automation in $REPO"
+                continue
+              fi
+
+              ENABLED=$(echo "$automation" | jq -r '.enabled // true')
+              if [ "$ENABLED" != "true" ]; then
+                echo "  ⏸️  Skipping [$NAME] in $REPO — automation is disabled (enabled: false)"
                 continue
               fi
 
