@@ -28,6 +28,7 @@ targets:
   - repo: "GabryXn/rpg-life-companion"
     automations:
       - name: "vulnerability-scan"
+        schedule: "weekly"
         prompt: |
           Esegui un'analisi completa di sicurezza e vulnerabilità su questo progetto:
           1. Controlla tutte le dipendenze per vulnerabilità note (CVE).
@@ -42,6 +43,7 @@ targets:
   - repo: "GabryXn/bot-orchestrator-hub"
     automations:
       - name: "vulnerability-scan"
+        schedule: "weekly"
         prompt: |
           Esegui un'analisi completa di sicurezza e vulnerabilità su questo progetto:
           1. Controlla tutte le dipendenze per vulnerabilità note (CVE).
@@ -75,6 +77,7 @@ targets:
 #    automations:
 #      - name: "<nome-automazione>"
 #        enabled: false   # Imposta a false per disabilitare temporaneamente
+#        schedule: "weekly"   # Opzioni: "daily" (default), "weekly" (lunedì), "monthly" (1° del mese)
 #        prompt: |
 #          <Scrivi qui cosa vuoi che Jules faccia.
 #          Puoi andare a capo e scrivere istruzioni dettagliate.

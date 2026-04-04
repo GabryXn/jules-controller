@@ -84,6 +84,23 @@ jobs:
                 continue
               fi
 
+              SCHEDULE=$(echo "$automation" | jq -r '.schedule // "daily"')
+              DOW=$(date -u +%u)   # 1=Monday ... 7=Sunday (UTC)
+              DOM=$(date -u +%d)   # 01-31 (UTC)
+
+              SHOULD_RUN=false
+              case "$SCHEDULE" in
+                daily)   SHOULD_RUN=true ;;
+                weekly)  [ "$DOW" == "1" ] && SHOULD_RUN=true ;;
+                monthly) [ "$DOM" == "01" ] && SHOULD_RUN=true ;;
+                *)       echo "  ⚠️ Unknown schedule '$SCHEDULE' for [$NAME], defaulting to daily"; SHOULD_RUN=true ;;
+              esac
+
+              if [ "$SHOULD_RUN" != "true" ]; then
+                echo "  ⏩ Skipping [$NAME] in $REPO — schedule '$SCHEDULE' not due today (UTC dow=$DOW dom=$DOM)"
+                continue
+              fi
+
               echo "  🤖 Triggering [$NAME]..."
               
               # Dispatch and handle errors
