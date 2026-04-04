@@ -27,3 +27,7 @@ schedules:
   # Esecuzione del Master Controller ciclico (Default suggerito: 04:00)
   # Gestito da: controller.yml
   master_controller_time: "04:00"
+
+  # Sincronizzazione automatica config (Default suggerito: 01:00)
+  # Gestito da: auto-config-sync.yml
+  auto_config_sync_time: "01:00"

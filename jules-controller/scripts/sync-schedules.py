@@ -67,7 +67,8 @@ def main():
     # Mapping tra chiavi config e file workflow
     mapping = {
         'setup_sync_time': ['master-setup.yml'],
-        'master_controller_time': ['controller.yml']
+        'master_controller_time': ['controller.yml'],
+        'auto_config_sync_time': ['auto-config-sync.yml']
     }
 
     for config_key, workflows in mapping.items():
