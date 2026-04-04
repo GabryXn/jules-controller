@@ -82,7 +82,8 @@ export function triggerJulesOnGithub(targetRepo: string, prompt: string, configT
 
     // --- CENTRALIZED CONTROL CHECK (using cached config) ---
     if (configText) {
-        if (configText.includes("calendar_automation: false")) {
+        const calendarDisabled = /^\s+calendar_automation\s*:\s*false\s*$/m.test(configText);
+        if (calendarDisabled) {
             console.warn(`🛑 Calendar Automation is DISABLED in global config. Skipping dispatch for ${targetRepo}.`);
             return false;
         }
