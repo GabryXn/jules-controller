@@ -2,7 +2,7 @@ name: Jules Universal Setup (Secrets & Workflows)
 
 on:
   schedule:
-    - cron: '0 2 * * *' # 03:00 Rome Time
+    - cron: '0 1 * * *' # 03:00 Rome Time
   workflow_dispatch:
 
 jobs:
@@ -57,8 +57,18 @@ jobs:
           echo "🔍 Fetching repository list..."
           gh api --paginate "/user/repos?per_page=100" | jq -r '.[] | select(.archived == false and .permissions.push == true) | "\(.full_name) \(.default_branch)"' > repos_list.txt
 
+          # Build exclusion pattern from jules_config.yml
+          EXCLUDED=$(yq eval '.excluded_repos[]' jules_config.yml 2>/dev/null | sed 's/[.[\*^${}\\+?|()]/\\&/g' | tr '\n' '|' | sed 's/|$//')
+          echo "🚫 Excluded repos pattern: ${EXCLUDED:-'(none)'}"
+
           while read -r REPO DEFAULT_BRANCH; do
             if [ "$REPO" == "$GITHUB_REPOSITORY" ]; then
+              continue
+            fi
+
+            # Skip explicitly excluded repos (outside subshell so `continue` works on the outer loop)
+            if [ -n "$EXCLUDED" ] && echo "$REPO" | grep -qE "^(${EXCLUDED})$"; then
+              echo "⏩ Skipping excluded repo: $REPO"
               continue
             fi
 

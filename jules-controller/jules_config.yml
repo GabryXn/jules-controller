@@ -31,3 +31,8 @@ schedules:
   # Sincronizzazione automatica config (Default suggerito: 01:00)
   # Gestito da: auto-config-sync.yml
   auto_config_sync_time: "01:00"
+
+# 3. Exclusion List (Repos esclusi dal Universal Setup)
+# Questi repository non riceveranno jules_agent.yml, secrets, labels o branch protection.
+excluded_repos:
+  - "GabryXn/jules-controller"   # Il controller stesso — non deve essere un target
