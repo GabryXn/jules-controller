@@ -473,23 +473,50 @@ function generateEventChecksum(event: GoogleAppsScript.Calendar.CalendarEvent): 
  * INITIAL SETUP SCRIPT
  */
 export function setupCalendarTrigger() {
-    const triggers = ScriptApp.getProjectTriggers();
-    let hasTrigger = false;
-    for (const trigger of triggers) {
-        if (trigger.getHandlerFunction() === 'onCalendarEvent') {
-            hasTrigger = true;
-            break;
-        }
-    }
-    if (!hasTrigger) {
+    // ── STEP 1: Delete all old checkAndTriggerJules triggers FIRST ──────────
+    // Must happen before wiping state to avoid a race window where an old
+    // trigger fires against empty SCHEDULED_EVENTS and writes stale bare keys.
+    ScriptApp.getProjectTriggers()
+        .filter(t => t.getHandlerFunction() === 'checkAndTriggerJules')
+        .forEach(t => ScriptApp.deleteTrigger(t));
+    console.log('✅ Cleaned up old checkAndTriggerJules triggers.');
+
+    // ── STEP 2: Wipe stale state (safe now — no old triggers can fire) ───────
+    PropertiesService.getScriptProperties().deleteProperty('SCHEDULED_EVENTS');
+    console.log('✅ Cleared SCHEDULED_EVENTS state (migration wipe).');
+
+    // ── STEP 3: Set up onCalendarEvent trigger (idempotent) ─────────────────
+    const hasCalendarTrigger = ScriptApp.getProjectTriggers()
+        .some(t => t.getHandlerFunction() === 'onCalendarEvent');
+    if (!hasCalendarTrigger) {
         const calendar = CalendarApp.getDefaultCalendar();
         ScriptApp.newTrigger('onCalendarEvent')
             .forUserCalendar(calendar.getId())
             .onEventUpdated()
             .create();
-        console.log('Calendar OnChange trigger successfully created!');
+        console.log('✅ Calendar OnChange trigger created.');
     } else {
-        console.log('Trigger already exists.');
+        console.log('ℹ️  Calendar OnChange trigger already exists.');
     }
+
+    // ── STEP 4: Set up 6-hour periodic rescan trigger (idempotent) ──────────
+    // Needed for recurring events: ensures future occurrences are scheduled
+    // as they enter the 14-day window, even without calendar edits.
+    const hasPeriodicTrigger = ScriptApp.getProjectTriggers()
+        .some(t => t.getHandlerFunction() === 'processCalendarEvents' &&
+                   t.getTriggerSource() === ScriptApp.TriggerSource.CLOCK);
+    if (!hasPeriodicTrigger) {
+        ScriptApp.newTrigger('processCalendarEvents')
+            .timeBased()
+            .everyHours(6)
+            .create();
+        console.log('✅ 6-hour periodic processCalendarEvents trigger created.');
+    } else {
+        console.log('ℹ️  Periodic trigger already exists.');
+    }
+
+    // ── STEP 5: Run initial scan to rebuild state with composite keys ────────
+    processCalendarEvents();
+    console.log('✅ Initial calendar scan complete. Setup done.');
 }
 
