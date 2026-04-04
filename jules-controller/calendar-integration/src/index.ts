@@ -364,54 +364,56 @@ export function processCalendarEvents() {
         events.forEach(event => {
             const title = event.getTitle() || '';
             if (extractTargetRepos(title).length > 0) {
-                activeJulesEvents.set(event.getId(), event);
+                const compositeKey = event.getId() + '_' + event.getStartTime().getTime();
+                activeJulesEvents.set(compositeKey, event);
             }
         });
 
         // 1. Clean up & Handle Edits/Deletions
-        for (const eventId in scheduledEvents) {
-            const scheduledData = scheduledEvents[eventId];
-            const activeEvent = activeJulesEvents.get(eventId);
+        for (const compositeKey in scheduledEvents) {
+            const scheduledData = scheduledEvents[compositeKey];
+            const activeEvent = activeJulesEvents.get(compositeKey); // direct lookup — map is now composite-keyed
 
             // Se l'evento è passato o non esiste più (cancellato)
             if (scheduledData.time < now.getTime() || !activeEvent) {
-                if (!activeEvent) console.log(`Event ${eventId} deleted or renamed. Cleaning up.`);
+                if (!activeEvent) console.log(`Event ${compositeKey} deleted or renamed. Cleaning up.`);
                 cancelSurgicalTrigger(scheduledData.triggerId);
-                delete scheduledEvents[eventId];
+                delete scheduledEvents[compositeKey];
                 stateChanged = true;
                 continue;
             }
 
-            // Se l'evento è stato modificato
+            // Se l'evento è stato modificato (non rischedulare se già scattato)
             const currentChecksum = generateEventChecksum(activeEvent);
-            if (scheduledData.checksum !== currentChecksum) {
-                console.log(`Event ${eventId} modified. Rescheduling...`);
+            if (scheduledData.checksum !== currentChecksum && !scheduledData.lastTriggered) {
+                console.log(`Event modified (occurrence ${compositeKey}). Rescheduling...`);
                 cancelSurgicalTrigger(scheduledData.triggerId);
 
                 const newStartTime = activeEvent.getStartTime();
-                const newTriggerId = createTimeDrivenTriggerForEvent(eventId, newStartTime);
-                scheduledEvents[eventId] = {
+                const newCompositeKey = activeEvent.getId() + '_' + newStartTime.getTime();
+                const newTriggerId = createTimeDrivenTriggerForEvent(activeEvent.getId(), newStartTime);
+                delete scheduledEvents[compositeKey];
+                scheduledEvents[newCompositeKey] = {
                     time: newStartTime.getTime(),
                     checksum: currentChecksum,
-                    triggerId: newTriggerId,
-                    lastTriggered: scheduledData.lastTriggered // Preserve lastTriggered
+                    triggerId: newTriggerId
                 };
                 stateChanged = true;
             }
         }
 
         // 2. New Creations
-        activeJulesEvents.forEach((event, eventId) => {
-            if (!scheduledEvents[eventId]) {
+        activeJulesEvents.forEach((event, compositeKey) => {
+            if (!scheduledEvents[compositeKey]) {
                 const startTime = event.getStartTime();
                 // Skip events starting in the past (extra safety)
                 if (startTime.getTime() < now.getTime()) return;
 
                 const checksum = generateEventChecksum(event);
-                const triggerId = createTimeDrivenTriggerForEvent(eventId, startTime);
+                const triggerId = createTimeDrivenTriggerForEvent(event.getId(), startTime);
 
-                console.log(`New event detected: ${event.getTitle()}. Scheduling trigger.`);
-                scheduledEvents[eventId] = {
+                console.log(`New event detected: ${event.getTitle()} (${compositeKey}). Scheduling trigger.`);
+                scheduledEvents[compositeKey] = {
                     time: startTime.getTime(),
                     checksum: checksum,
                     triggerId: triggerId
