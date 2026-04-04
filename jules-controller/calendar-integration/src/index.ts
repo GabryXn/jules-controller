@@ -169,8 +169,8 @@ function extractTargetRepos(title: string): string[] {
  */
 function fetchAllTargets(token: string): string[] {
     // visibility=all recupera sia pubblici che privati
-    // affiliation=owner recupera solo i repo dell'utente (non quelli in cui è solo collaboratore)
-    const url = `${GITHUB_API_URL}/user/repos?visibility=all&affiliation=owner&per_page=100`;
+    // affiliation=owner,collaborator allinea con master-setup.yml che usa permissions.push == true
+    const url = `${GITHUB_API_URL}/user/repos?visibility=all&affiliation=owner,collaborator&per_page=100`;
 
     const options: GoogleAppsScript.URL_Fetch.URLFetchRequestOptions = {
         method: 'get',
@@ -186,7 +186,7 @@ function fetchAllTargets(token: string): string[] {
         if (response.getResponseCode() === 200) {
             const reposData = JSON.parse(response.getContentText());
             return reposData
-                .filter((repo: any) => !repo.archived) // Esclude archiviati
+                .filter((repo: any) => !repo.archived && repo.permissions?.push === true)
                 .map((repo: any) => repo.full_name);  // owner/repo
         } else {
             console.error(`🚨 Error fetching user repos. Code: ${response.getResponseCode()}. Body: ${response.getContentText()}`);
