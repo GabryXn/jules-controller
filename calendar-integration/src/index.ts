@@ -17,7 +17,7 @@ const WORKFLOW_NAME = 'jules_agent.yml';
 // ============================================================================
 
 /**
- * Recupera il default branch di un repository (es. 'main' o 'master')
+ * Recupera il default branch di un repository (es. 'master')
  */
 function getDefaultBranch(targetRepo: string, token: string): string {
     const url = `${GITHUB_API_URL}/repos/${targetRepo}`;
@@ -34,12 +34,12 @@ function getDefaultBranch(targetRepo: string, token: string): string {
         const response = UrlFetchApp.fetch(url, options);
         if (response.getResponseCode() === 200) {
             const data = JSON.parse(response.getContentText());
-            return data.default_branch || 'main';
+            return data.default_branch || 'master';
         }
     } catch (e) {
-        console.warn(`⚠️ Could not fetch default branch for ${targetRepo}, falling back to 'main'.`);
+        console.warn(`⚠️ Could not fetch default branch for ${targetRepo}, falling back to 'master'.`);
     }
-    return 'main';
+    return 'master';
 }
 
 /**

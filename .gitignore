@@ -33,3 +33,8 @@ Prompt.txt
 
 # Log CI
 jules-dispatch/
+
+# >>> GitSync-KDE (auto-managed — do not remove) >>>
+# KDE folder icon (managed by GitSync-KDE)
+.directory
+# <<< GitSync-KDE <<<
