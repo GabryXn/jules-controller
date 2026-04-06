@@ -87,33 +87,53 @@ jobs:
                 gh secret set CLASPRC_JSON -R "$REPO" -b "$CLASPRC_JSON" || echo "  ⚠️  Failed to set CLASPRC_JSON"
               fi
 
-              # 2. Deploy jules_agent.yml
-              echo "  📄 Deploying jules_agent.yml..."
-              EXISTING_SHA=$(gh api "repos/$REPO/contents/$DEST_AGENT" --jq '.sha' 2>/dev/null || echo "")
+              # 2. Deploy jules_agent.yml (skip if content is identical)
+              echo "  📄 Checking jules_agent.yml..."
+              EXISTING_AGENT_JSON=$(gh api "repos/$REPO/contents/$DEST_AGENT" 2>/dev/null || echo "")
+              EXISTING_SHA=""
+              EXISTING_AGENT_B64=""
+              if [ -n "$EXISTING_AGENT_JSON" ]; then
+                EXISTING_SHA=$(echo "$EXISTING_AGENT_JSON" | jq -r '.sha // empty')
+                EXISTING_AGENT_B64=$(echo "$EXISTING_AGENT_JSON" | jq -r '.content // empty' | tr -d '\n ')
+              fi
 
-              if [ -n "$EXISTING_SHA" ]; then
+              if [ -n "$EXISTING_SHA" ] && [ "$EXISTING_AGENT_B64" == "$AGENT_CONTENT" ]; then
+                echo "  ⏩ jules_agent.yml is already up-to-date. Skipping."
+              elif [ -n "$EXISTING_SHA" ]; then
+                echo "  📄 Updating jules_agent.yml..."
                 gh api --method PUT "repos/$REPO/contents/$DEST_AGENT" \
                   -f message="chore: update jules_agent.yml from controller" \
                   -f content="$AGENT_CONTENT" \
                   -f sha="$EXISTING_SHA" --silent || echo "  ⚠️  Failed to update jules_agent.yml"
               else
+                echo "  📄 Adding jules_agent.yml..."
                 gh api --method PUT "repos/$REPO/contents/$DEST_AGENT" \
                   -f message="chore: add jules_agent.yml from controller" \
                   -f content="$AGENT_CONTENT" --silent || echo "  ⚠️  Failed to add jules_agent.yml"
               fi
 
-              # 3. Detect & Deploy clasp_deploy.yml
+              # 3. Detect & Deploy clasp_deploy.yml (skip if content is identical)
               HAS_CLASP=$(gh api "repos/$REPO/contents/.clasp.json" --silent > /dev/null && echo "true" || echo "false")
               if [ "$HAS_CLASP" == "true" ]; then
-                echo "  ✨ Clasp project detected! Deploying clasp_deploy.yml..."
-                CLASP_SHA=$(gh api "repos/$REPO/contents/$DEST_CLASP" --jq '.sha' 2>/dev/null || echo "")
+                echo "  ✨ Clasp project detected! Checking clasp_deploy.yml..."
+                EXISTING_CLASP_JSON=$(gh api "repos/$REPO/contents/$DEST_CLASP" 2>/dev/null || echo "")
+                CLASP_SHA=""
+                EXISTING_CLASP_B64=""
+                if [ -n "$EXISTING_CLASP_JSON" ]; then
+                  CLASP_SHA=$(echo "$EXISTING_CLASP_JSON" | jq -r '.sha // empty')
+                  EXISTING_CLASP_B64=$(echo "$EXISTING_CLASP_JSON" | jq -r '.content // empty' | tr -d '\n ')
+                fi
 
-                if [ -n "$CLASP_SHA" ]; then
+                if [ -n "$CLASP_SHA" ] && [ "$EXISTING_CLASP_B64" == "$CLASP_CONTENT" ]; then
+                  echo "  ⏩ clasp_deploy.yml is already up-to-date. Skipping."
+                elif [ -n "$CLASP_SHA" ]; then
+                  echo "  📄 Updating clasp_deploy.yml..."
                   gh api --method PUT "repos/$REPO/contents/$DEST_CLASP" \
                     -f message="chore: update clasp_deploy.yml from controller" \
                     -f content="$CLASP_CONTENT" \
                     -f sha="$CLASP_SHA" --silent || echo "  ⚠️  Failed to update clasp_deploy.yml"
                 else
+                  echo "  📄 Adding clasp_deploy.yml..."
                   gh api --method PUT "repos/$REPO/contents/$DEST_CLASP" \
                     -f message="chore: add clasp_deploy.yml from controller" \
                     -f content="$CLASP_CONTENT" --silent || echo "  ⚠️  Failed to add clasp_deploy.yml"
