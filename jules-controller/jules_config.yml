@@ -20,6 +20,9 @@ features:
   # Auto-deploy su Google Apps Script per progetti Clasp (clasp_deploy.yml + clasp_targets.yml)
   clasp_deployment: true
 
+  # Review automatica PR: CodeRabbit (repo pubblici) + Gemini Flash (repo privati)
+  pr_review: true
+
 # 2. Scheduling (Orari in formato HH:MM - Fuso Orario di ROMA)
 # I cambiamenti qui aggiorneranno automaticamente i workflow di GitHub.
 schedules:

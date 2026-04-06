@@ -44,21 +44,35 @@ jobs:
           CLASP_ENABLED=$(yq eval '.features.clasp_deployment // true' jules_config.yml)
           echo "clasp_enabled=$CLASP_ENABLED" >> $GITHUB_OUTPUT
 
+      - name: Check PR Review Config
+        id: check_pr_review
+        run: |
+          PR_REVIEW_ENABLED=$(yq eval '.features.pr_review // true' jules_config.yml)
+          echo "pr_review_enabled=$PR_REVIEW_ENABLED" >> $GITHUB_OUTPUT
+
       - name: 🚀 Run Sequential Setup
         if: steps.check_config.outputs.enabled == 'true'
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
           JULES_API_KEY: ${{ secrets.JULES_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
           CLASP_ENABLED: ${{ steps.check_clasp.outputs.clasp_enabled }}
+          PR_REVIEW_ENABLED: ${{ steps.check_pr_review.outputs.pr_review_enabled }}
         run: |
           TEMPLATE_AGENT="templates/jules_agent.yml"
           TEMPLATE_CLASP="templates/clasp_deploy.yml"
+          TEMPLATE_REVIEWER="templates/jules_reviewer.yml"
+          TEMPLATE_CODERABBIT="templates/.coderabbit.yaml"
           DEST_AGENT=".github/workflows/jules_agent.yml"
           DEST_CLASP=".github/workflows/clasp_deploy.yml"
+          DEST_REVIEWER=".github/workflows/jules_reviewer.yml"
+          DEST_CODERABBIT=".coderabbit.yaml"
 
           AGENT_CONTENT=$(base64 -w 0 "$TEMPLATE_AGENT")
           CLASP_CONTENT=$(base64 -w 0 "$TEMPLATE_CLASP")
+          REVIEWER_CONTENT=$(base64 -w 0 "$TEMPLATE_REVIEWER")
+          CODERABBIT_CONTENT=$(base64 -w 0 "$TEMPLATE_CODERABBIT")
 
           # Load clasp_targets.yml into a list of configured repos
           CLASP_TARGETS=""
@@ -72,9 +86,9 @@ jobs:
 
           # Get all non-archived repos where the user has push access (owner or collaborator)
           echo "🔍 Fetching repository list..."
-          gh api --paginate "/user/repos?per_page=100" | jq -r '.[] | select(.archived == false and .permissions.push == true) | "\(.full_name) \(.default_branch)"' > repos_list.txt
+          gh api --paginate "/user/repos?per_page=100" | jq -r '.[] | select(.archived == false and .permissions.push == true) | "\(.full_name) \(.default_branch) \(if .private then "private" else "public" end)"' > repos_list.txt
 
-          while read -r REPO DEFAULT_BRANCH; do
+          while read -r REPO DEFAULT_BRANCH VISIBILITY; do
             if [ "$REPO" == "$GITHUB_REPOSITORY" ]; then
               continue
             fi
@@ -82,12 +96,17 @@ jobs:
             # Wrap in a subshell to ensure errors in one repo don't stop the loop
             (
               echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-              echo "📦 Processing $REPO (Default Branch: $DEFAULT_BRANCH)"
+              echo "📦 Processing $REPO (Default Branch: $DEFAULT_BRANCH, Visibility: $VISIBILITY)"
               echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
               # 1. Sync Secrets
               echo "  🔑 Syncing JULES_API_KEY..."
               gh secret set JULES_API_KEY -R "$REPO" -b "$JULES_API_KEY" || echo "  ⚠️  Failed to set JULES_API_KEY"
+
+              if [ "$VISIBILITY" == "private" ] && [ -n "$GEMINI_API_KEY" ]; then
+                echo "  🔑 Syncing GEMINI_API_KEY (private repo → Gemini reviewer)..."
+                gh secret set GEMINI_API_KEY -R "$REPO" -b "$GEMINI_API_KEY" || echo "  ⚠️  Failed to set GEMINI_API_KEY"
+              fi
 
               if [ -n "$CLASPRC_JSON" ]; then
                 echo "  🔑 Syncing CLASPRC_JSON..."
@@ -119,7 +138,79 @@ jobs:
                   -f content="$AGENT_CONTENT" --silent || echo "  ⚠️  Failed to add jules_agent.yml"
               fi
 
-              # 3. Detect & Deploy clasp_deploy.yml (config-driven OR auto-detect)
+              # 3. Deploy PR Review System (CodeRabbit for public, Gemini for private)
+              if [ "$PR_REVIEW_ENABLED" != "true" ]; then
+                echo "  ⏩ PR Review is disabled in config. Skipping."
+              elif [ "$VISIBILITY" == "public" ]; then
+                # PUBLIC REPO → Deploy .coderabbit.yaml
+                echo "  🐰 Public repo → Deploying .coderabbit.yaml..."
+                EXISTING_CR_JSON=$(gh api "repos/$REPO/contents/$DEST_CODERABBIT" 2>/dev/null || echo "")
+                CR_SHA=""
+                EXISTING_CR_B64=""
+                if [ -n "$EXISTING_CR_JSON" ]; then
+                  CR_SHA=$(echo "$EXISTING_CR_JSON" | jq -r '.sha // empty')
+                  EXISTING_CR_B64=$(echo "$EXISTING_CR_JSON" | jq -r '.content // empty' | tr -d '\n ')
+                fi
+
+                if [ -n "$CR_SHA" ] && [ "$EXISTING_CR_B64" == "$CODERABBIT_CONTENT" ]; then
+                  echo "  ⏩ .coderabbit.yaml is already up-to-date. Skipping."
+                elif [ -n "$CR_SHA" ]; then
+                  echo "  📄 Updating .coderabbit.yaml..."
+                  gh api --method PUT "repos/$REPO/contents/$DEST_CODERABBIT" \
+                    -f message="chore: update .coderabbit.yaml from controller" \
+                    -f content="$CODERABBIT_CONTENT" \
+                    -f sha="$CR_SHA" --silent || echo "  ⚠️  Failed to update .coderabbit.yaml"
+                else
+                  echo "  📄 Adding .coderabbit.yaml..."
+                  gh api --method PUT "repos/$REPO/contents/$DEST_CODERABBIT" \
+                    -f message="chore: add .coderabbit.yaml from controller" \
+                    -f content="$CODERABBIT_CONTENT" --silent || echo "  ⚠️  Failed to add .coderabbit.yaml"
+                fi
+
+                # Remove jules_reviewer.yml from public repos if it exists (CodeRabbit handles it)
+                EXISTING_REVIEWER_JSON=$(gh api "repos/$REPO/contents/$DEST_REVIEWER" 2>/dev/null || echo "")
+                if [ -n "$EXISTING_REVIEWER_JSON" ]; then
+                  REVIEWER_SHA=$(echo "$EXISTING_REVIEWER_JSON" | jq -r '.sha // empty')
+                  if [ -n "$REVIEWER_SHA" ]; then
+                    echo "  🧹 Removing jules_reviewer.yml (CodeRabbit handles public repos)..."
+                    gh api --method DELETE "repos/$REPO/contents/$DEST_REVIEWER" \
+                      -f message="chore: remove Gemini reviewer (replaced by CodeRabbit)" \
+                      -f sha="$REVIEWER_SHA" --silent 2>/dev/null || true
+                  fi
+                fi
+
+              else
+                # PRIVATE REPO → Deploy jules_reviewer.yml (Gemini)
+                if [ -n "$GEMINI_API_KEY" ]; then
+                  echo "  🤖 Private repo → Deploying jules_reviewer.yml (Gemini)..."
+                  EXISTING_REVIEWER_JSON=$(gh api "repos/$REPO/contents/$DEST_REVIEWER" 2>/dev/null || echo "")
+                  RV_SHA=""
+                  EXISTING_RV_B64=""
+                  if [ -n "$EXISTING_REVIEWER_JSON" ]; then
+                    RV_SHA=$(echo "$EXISTING_REVIEWER_JSON" | jq -r '.sha // empty')
+                    EXISTING_RV_B64=$(echo "$EXISTING_REVIEWER_JSON" | jq -r '.content // empty' | tr -d '\n ')
+                  fi
+
+                  if [ -n "$RV_SHA" ] && [ "$EXISTING_RV_B64" == "$REVIEWER_CONTENT" ]; then
+                    echo "  ⏩ jules_reviewer.yml is already up-to-date. Skipping."
+                  elif [ -n "$RV_SHA" ]; then
+                    echo "  📄 Updating jules_reviewer.yml..."
+                    gh api --method PUT "repos/$REPO/contents/$DEST_REVIEWER" \
+                      -f message="chore: update jules_reviewer.yml from controller" \
+                      -f content="$REVIEWER_CONTENT" \
+                      -f sha="$RV_SHA" --silent || echo "  ⚠️  Failed to update jules_reviewer.yml"
+                  else
+                    echo "  📄 Adding jules_reviewer.yml..."
+                    gh api --method PUT "repos/$REPO/contents/$DEST_REVIEWER" \
+                      -f message="chore: add jules_reviewer.yml from controller" \
+                      -f content="$REVIEWER_CONTENT" --silent || echo "  ⚠️  Failed to add jules_reviewer.yml"
+                  fi
+                else
+                  echo "  ⏩ GEMINI_API_KEY not set. Skipping Gemini reviewer for private repo."
+                fi
+              fi
+
+              # 4. Detect & Deploy clasp_deploy.yml (config-driven OR auto-detect)
               IS_CLASP_TARGET="false"
               if [ "$CLASP_ENABLED" == "true" ]; then
                 # Check config-driven targets first
@@ -164,7 +255,7 @@ jobs:
                 echo "  ⏩ Not a Clasp project. Skipping clasp_deploy.yml."
               fi
 
-              # 4. Ensure 'jules' label (POST then PATCH to ensure color/description)
+              # 5. Ensure 'jules' label (POST then PATCH to ensure color/description)
               echo "  🏷️ Ensuring 'jules' label..."
               gh api --method POST /repos/$REPO/labels \
                 -f name='jules' \
@@ -174,7 +265,7 @@ jobs:
                 -f description='Trigga il Google Jules AI Agent' \
                 -f color='6B46C1' --silent || echo "  ⚠️  Failed to sync 'jules' label"
 
-              # 5. Apply Branch Protection (Only if default_branch is not null/empty)
+              # 6. Apply Branch Protection (Only if default_branch is not null/empty)
               if [ -n "$DEFAULT_BRANCH" ] && [ "$DEFAULT_BRANCH" != "null" ]; then
                 echo "  🛡️ Setting up Branch Protection on '$DEFAULT_BRANCH'..."
                 gh api --method PUT "/repos/$REPO/branches/$DEFAULT_BRANCH/protection" \
@@ -190,7 +281,7 @@ jobs:
                 echo "  ⏩ Skipping branch protection (empty repository or no default branch)."
               fi
 
-              # 6. Enable Auto-delete head branches
+              # 7. Enable Auto-delete head branches
               echo "  🧹 Enabling 'delete head branches' on merge..."
               gh repo edit "$REPO" --delete-branch-on-merge --silent || echo "  ⚠️  Could not enable auto-delete head branches"
 

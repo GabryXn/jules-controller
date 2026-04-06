@@ -54,9 +54,11 @@ calendar-integration (Apps Script)
 
 ### File di configurazione chiave
 
-- **`jules-controller/jules_config.yml`** — Feature flags (`cyclic_automation`, `issue_automation`, `calendar_automation`, `workflow_deployment`) e orari schedulati in ora di Roma
+- **`jules-controller/jules_config.yml`** — Feature flags (`cyclic_automation`, `issue_automation`, `calendar_automation`, `workflow_deployment`, `pr_review`) e orari schedulati in ora di Roma
 - **`jules-controller/jules_targets.yml`** — Lista dei repository target con nome automation e prompt Jules
 - **`jules-controller/templates/jules_agent.yml`** — Template del workflow deployato sui repo target; riceve prompt via `workflow_dispatch` o da issue con label `jules`
+- **`jules-controller/templates/jules_reviewer.yml`** — Workflow Gemini Flash per review automatica PR (repo privati)
+- **`jules-controller/templates/.coderabbit.yaml`** — Config CodeRabbit per review automatica PR (repo pubblici)
 
 ### Gestione timezone
 
@@ -81,6 +83,21 @@ Il modulo Apps Script (`calendar-integration/src/index.ts`) monitora gli eventi 
 | `controller.yml` | Cron UTC 03:00 | Dispatcher principale: legge targets e attiva Jules |
 | `auto-config-sync.yml` | Push su `jules_config.yml` | Sincronizza Rome Time → UTC nei workflow |
 | `jules_agent.yml` (template) | `workflow_dispatch` / issue label | Eseguito nei repo target, invoca Jules AI |
+| `jules_reviewer.yml` (template) | `pull_request` (opened/sync) | Review automatica PR con Gemini Flash (repo privati) |
+
+### PR Review System
+
+Il sistema di review automatica delle PR si adatta alla visibilità del repository:
+
+- **Repo pubblici** → CodeRabbit (GitHub App gratuita, `.coderabbit.yaml` deployato automaticamente)
+- **Repo privati** → Gemini 2.0 Flash via API gratuita (`jules_reviewer.yml` deployato automaticamente)
+
+Il reviewer Gemini analizza il diff e assegna un verdict:
+- `SAFE` (label verde `jules-safe`) — PR corretta, mergiabile
+- `RISKY` (label gialla `jules-risky`) — richiede revisione umana
+- `BROKEN` (label rossa `jules-broken`) — PR auto-chiusa con commento
+
+Secrets necessari nel controller: `GEMINI_API_KEY` (gratuita da aistudio.google.com)
 
 ## Build System (Calendar Integration)
 
