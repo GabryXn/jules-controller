@@ -3,14 +3,17 @@ name: Clasp Auto-Deploy
 on:
   push:
     branches:
-      - main
       - master
+      - main
     paths:
       - 'src/**'
       - 'package.json'
       - 'tsconfig.json'
+      - 'tsconfig.*.json'
       - '.clasp.json'
       - 'scripts/**'
+      - 'vite.config.*'
+      - 'build.js'
   workflow_dispatch:
 
 jobs:
@@ -24,6 +27,23 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+
+      - name: 🔧 Generate .clasp.json (if missing)
+        env:
+          CLASP_SCRIPT_ID: ${{ secrets.CLASP_SCRIPT_ID }}
+          CLASP_ROOT_DIR: ${{ secrets.CLASP_ROOT_DIR }}
+        run: |
+          if [ -f ".clasp.json" ]; then
+            echo "✅ Using existing .clasp.json"
+          elif [ -n "$CLASP_SCRIPT_ID" ]; then
+            ROOT_DIR="${CLASP_ROOT_DIR:-./dist}"
+            echo "{\"scriptId\":\"$CLASP_SCRIPT_ID\",\"rootDir\":\"$ROOT_DIR\"}" > .clasp.json
+            echo "✅ Generated .clasp.json (scriptId from secret, rootDir: $ROOT_DIR)"
+          else
+            echo "❌ ERROR: No .clasp.json found and CLASP_SCRIPT_ID secret is not set."
+            echo "Set CLASP_SCRIPT_ID as a repository secret or commit .clasp.json to the repo."
+            exit 1
+          fi
 
       - name: 🛠️ Setup Package Manager
         id: setup-pm
@@ -76,3 +96,16 @@ jobs:
           else
             npx @google/clasp push -f
           fi
+
+      - name: 📝 Deploy Summary
+        if: always()
+        run: |
+          echo "### 📦 Clasp Auto-Deploy" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "✅ **Success**: Code built and pushed to Google Apps Script." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **Failed**: Deploy did not complete. Check logs above." >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Trigger:** \`${{ github.event_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY

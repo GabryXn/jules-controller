@@ -38,20 +38,37 @@ jobs:
           ENABLED=$(yq eval '.features.workflow_deployment' jules_config.yml)
           echo "enabled=$ENABLED" >> $GITHUB_OUTPUT
 
+      - name: Check Clasp Deployment Config
+        id: check_clasp
+        run: |
+          CLASP_ENABLED=$(yq eval '.features.clasp_deployment // true' jules_config.yml)
+          echo "clasp_enabled=$CLASP_ENABLED" >> $GITHUB_OUTPUT
+
       - name: 🚀 Run Sequential Setup
         if: steps.check_config.outputs.enabled == 'true'
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
           JULES_API_KEY: ${{ secrets.JULES_API_KEY }}
           CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+          CLASP_ENABLED: ${{ steps.check_clasp.outputs.clasp_enabled }}
         run: |
           TEMPLATE_AGENT="templates/jules_agent.yml"
           TEMPLATE_CLASP="templates/clasp_deploy.yml"
           DEST_AGENT=".github/workflows/jules_agent.yml"
           DEST_CLASP=".github/workflows/clasp_deploy.yml"
-          
+
           AGENT_CONTENT=$(base64 -w 0 "$TEMPLATE_AGENT")
           CLASP_CONTENT=$(base64 -w 0 "$TEMPLATE_CLASP")
+
+          # Load clasp_targets.yml into a list of configured repos
+          CLASP_TARGETS=""
+          if [ -f "clasp_targets.yml" ] && [ "$CLASP_ENABLED" == "true" ]; then
+            CLASP_TARGETS=$(yq eval '.clasp_targets[].repo' clasp_targets.yml 2>/dev/null || echo "")
+            if [ -n "$CLASP_TARGETS" ]; then
+              echo "📋 Clasp targets from config:"
+              echo "$CLASP_TARGETS" | sed 's/^/  - /'
+            fi
+          fi
 
           # Get all non-archived repos where the user has push access (owner or collaborator)
           echo "🔍 Fetching repository list..."
@@ -112,10 +129,25 @@ jobs:
                   -f content="$AGENT_CONTENT" --silent || echo "  ⚠️  Failed to add jules_agent.yml"
               fi
 
-              # 3. Detect & Deploy clasp_deploy.yml (skip if content is identical)
-              HAS_CLASP=$(gh api "repos/$REPO/contents/.clasp.json" --silent > /dev/null && echo "true" || echo "false")
-              if [ "$HAS_CLASP" == "true" ]; then
-                echo "  ✨ Clasp project detected! Checking clasp_deploy.yml..."
+              # 3. Detect & Deploy clasp_deploy.yml (config-driven OR auto-detect)
+              IS_CLASP_TARGET="false"
+              if [ "$CLASP_ENABLED" == "true" ]; then
+                # Check config-driven targets first
+                if echo "$CLASP_TARGETS" | grep -qx "$REPO"; then
+                  IS_CLASP_TARGET="true"
+                  echo "  ✨ Clasp project (from clasp_targets.yml)"
+                else
+                  # Fallback: auto-detect .clasp.json in repo
+                  HAS_CLASP=$(gh api "repos/$REPO/contents/.clasp.json" --silent > /dev/null 2>&1 && echo "true" || echo "false")
+                  if [ "$HAS_CLASP" == "true" ]; then
+                    IS_CLASP_TARGET="true"
+                    echo "  ✨ Clasp project (auto-detected via .clasp.json)"
+                  fi
+                fi
+              fi
+
+              if [ "$IS_CLASP_TARGET" == "true" ]; then
+                echo "  📄 Checking clasp_deploy.yml..."
                 EXISTING_CLASP_JSON=$(gh api "repos/$REPO/contents/$DEST_CLASP" 2>/dev/null || echo "")
                 CLASP_SHA=""
                 EXISTING_CLASP_B64=""

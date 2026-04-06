@@ -1,0 +1,63 @@
+name: Deploy Calendar Integration to Apps Script
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - 'jules-controller/calendar-integration/src/**'
+      - 'jules-controller/calendar-integration/package.json'
+      - 'jules-controller/calendar-integration/tsconfig.json'
+      - 'jules-controller/calendar-integration/scripts/**'
+      - 'jules-controller/calendar-integration/.clasp.json'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: jules-controller/calendar-integration
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup pnpm
+        run: npm install -g pnpm
+
+      - name: 📦 Install Dependencies
+        run: pnpm install
+
+      - name: 🚀 Build
+        run: pnpm run build
+
+      - name: 🔐 Configure Clasp
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          if [ -z "$CLASPRC_JSON" ]; then
+            echo "❌ ERROR: CLASPRC_JSON secret is missing."
+            exit 1
+          fi
+          echo "$CLASPRC_JSON" > ~/.clasprc.json
+
+      - name: 📤 Push to Apps Script
+        run: pnpm exec clasp push -f
+
+      - name: 📝 Deploy Summary
+        if: always()
+        run: |
+          echo "### 📅 Calendar Integration Deploy" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "✅ **Success**: Calendar integration pushed to Google Apps Script." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **Failed**: Deploy did not complete. Check logs above." >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Trigger:** \`${{ github.event_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY

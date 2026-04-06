@@ -1,0 +1,43 @@
+# ╔═══════════════════════════════════════════════════════════════╗
+# ║           CLASP AUTO-DEPLOY — TARGET CONFIG                 ║
+# ╠═══════════════════════════════════════════════════════════════╣
+# ║  Questo file elenca i repository Apps Script che necessitano ║
+# ║  del workflow clasp_deploy.yml anche se .clasp.json          ║
+# ║  è gitignored (non visibile via GitHub API).                 ║
+# ║                                                              ║
+# ║  📖 COME FUNZIONA:                                           ║
+# ║  master-setup.yml deploya clasp_deploy.yml in due modi:      ║
+# ║  1. Auto-detect: se .clasp.json è visibile nel repo          ║
+# ║  2. Config-driven: se il repo è listato qui sotto            ║
+# ║                                                              ║
+# ║  🔐 SETUP RICHIESTO per repo che gitignano .clasp.json:      ║
+# ║  Impostare il secret CLASP_SCRIPT_ID sul repo target         ║
+# ║  (opzionale: CLASP_ROOT_DIR se diverso da ./dist)            ║
+# ║                                                              ║
+# ║  ⚠️  NON inserire scriptId qui: questo repo è PUBBLICO.       ║
+# ╚═══════════════════════════════════════════════════════════════╝
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  TARGET — Repo con .clasp.json gitignored
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+clasp_targets:
+
+  # ── Automation Spoke ────────────────────
+  # .clasp.json è in .gitignore → serve CLASP_SCRIPT_ID come secret
+  - repo: "GabryXn/automation-spoke"
+    root_dir: "./dist"
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  📋 TEMPLATE — Per aggiungere nuovi target
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#
+#  - repo: "<owner>/<nome-repository>"
+#    root_dir: "./dist"          # Directory output del build (default: ./dist)
+#
+# Dopo aver aggiunto il target:
+#   1. Imposta CLASP_SCRIPT_ID come secret sul repo target
+#   2. (Opzionale) Imposta CLASP_ROOT_DIR se diverso da ./dist
+#   3. Esegui master-setup.yml per deployare il workflow
