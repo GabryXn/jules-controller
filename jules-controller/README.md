@@ -1,5 +1,7 @@
 # 🤖 Google Jules Master Controller
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](../LICENSE)
+
 > **Il Cervello Centrale** per l'orchestrazione di Google Jules su tutti i tuoi repository GitHub.
 > Permette di gestire automazioni cicliche notturne, programmazione remota tramite Issue, comandi da Google Calendar e protezione automatica dei branch — tutto da un unico punto di controllo.
 
@@ -102,7 +104,7 @@ Il workflow che garantisce che **ogni repository** dell'account sia sempre allin
 | Proprietà | Dettaglio |
 | :--- | :--- |
 | **Esecuzione** | Ogni notte alle **03:00 AM (Rome Time)**, prima del controller |
-| **Scope** | Tutti i repository non-archiviati dell'account `GabryXn` |
+| **Scope** | Tutti i repository non-archiviati dell'account configurato via `PAT_TOKEN` |
 | **Trigger Manuale** | Sì, tramite `workflow_dispatch` |
 
 **Azioni Sequenziali (per ogni repository):**
@@ -353,7 +355,7 @@ jules-controller/
    - Aggiungi la proprietà: `PAT_TOKEN` = `[IL TUO GITHUB PAT TOKEN]`.
    - Esegui la funzione `setupCalendarTrigger` **una sola volta** manualmente (tasto "Esegui" nell'editor).
 
-5. **Testa:** Crea un evento nel calendario con titolo `Jules: GabryXn/tuo-repo` e le istruzioni nella descrizione.
+5. **Testa:** Crea un evento nel calendario con titolo `Jules: your-username/your-repo` e le istruzioni nella descrizione.
 
 ---
 
