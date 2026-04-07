@@ -1,0 +1,214 @@
+# ═══════════════════════════════════════════════════════════════
+# Jules PR Reviewer — Gemini Flash (Private Repos)
+# ═══════════════════════════════════════════════════════════════
+# Questo file viene deployato automaticamente nei repo PRIVATI
+# dal master-setup.yml del jules-controller.
+#
+# Si attiva su ogni PR e usa Gemini Flash (API gratuita) per
+# analizzare il diff e postare un verdict: SAFE / RISKY / BROKEN.
+#
+# Le PR BROKEN vengono chiuse automaticamente con un commento.
+# ═══════════════════════════════════════════════════════════════
+
+name: Jules PR Reviewer (Gemini)
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+# Permessi necessari per commentare e chiudere PR
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get PR diff
+        id: diff
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Fetch the full diff of the PR
+          DIFF=$(gh pr diff ${{ github.event.pull_request.number }} --color=never 2>/dev/null || echo "")
+
+          if [ -z "$DIFF" ]; then
+            echo "⚠️ Could not fetch PR diff."
+            echo "empty=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Truncate diff if too large (Gemini has token limits)
+          DIFF_SIZE=$(echo "$DIFF" | wc -c)
+          MAX_SIZE=60000
+          if [ "$DIFF_SIZE" -gt "$MAX_SIZE" ]; then
+            echo "⚠️ Diff too large ($DIFF_SIZE bytes), truncating to $MAX_SIZE bytes"
+            DIFF=$(echo "$DIFF" | head -c $MAX_SIZE)
+            DIFF="$DIFF\n\n[... DIFF TRUNCATED — too large for review ...]"
+          fi
+
+          # Save to file to avoid shell escaping issues
+          echo "$DIFF" > /tmp/pr_diff.txt
+          echo "empty=false" >> $GITHUB_OUTPUT
+
+      - name: Get PR info
+        if: steps.diff.outputs.empty != 'true'
+        id: pr_info
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_TITLE="${{ github.event.pull_request.title }}"
+          PR_BODY=$(gh pr view ${{ github.event.pull_request.number }} --json body -q '.body' 2>/dev/null || echo "No description")
+
+          echo "$PR_TITLE" > /tmp/pr_title.txt
+          echo "$PR_BODY" > /tmp/pr_body.txt
+
+      - name: Review with Gemini Flash
+        if: steps.diff.outputs.empty != 'true'
+        id: gemini
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          if [ -z "$GEMINI_API_KEY" ]; then
+            echo "⚠️ GEMINI_API_KEY not set. Skipping review."
+            echo "skip=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          PR_TITLE=$(cat /tmp/pr_title.txt)
+          PR_BODY=$(cat /tmp/pr_body.txt)
+          DIFF=$(cat /tmp/pr_diff.txt)
+
+          # Build the prompt
+          PROMPT=$(cat <<'PROMPT_EOF'
+          Sei un Senior Code Reviewer esperto. Analizza questa Pull Request e il suo diff.
+
+          Il tuo compito è determinare se questa PR è:
+          - **SAFE**: Il codice è corretto, non introduce bug, non rompe funzionalità esistenti. Può essere mergiata.
+          - **RISKY**: Il codice potrebbe avere problemi ma non è chiaramente rotto. Richiede revisione umana.
+          - **BROKEN**: Il codice ha errori evidenti, bug logici, syntax errors, import mancanti, o rompe chiaramente funzionalità esistenti.
+
+          REGOLE:
+          1. Concentrati SOLO su bug reali, errori logici, e breaking changes.
+          2. NON segnalare problemi di stile, formattazione, o naming conventions.
+          3. Se il diff è solo documentazione, test, o commenti → SAFE.
+          4. Se hai dubbi, scegli RISKY (mai BROKEN senza certezza).
+          5. Rispondi SOLO con un JSON valido, nessun altro testo.
+
+          Formato risposta (JSON puro, no markdown):
+          {"verdict": "SAFE|RISKY|BROKEN", "summary": "Breve riassunto in italiano (max 2 frasi)", "issues": ["problema 1", "problema 2"]}
+
+          Se SAFE, "issues" deve essere un array vuoto [].
+          PROMPT_EOF
+          )
+
+          # Build JSON payload using jq to handle escaping properly
+          PAYLOAD=$(jq -n \
+            --arg prompt "$PROMPT" \
+            --arg title "$PR_TITLE" \
+            --arg body "$PR_BODY" \
+            --arg diff "$DIFF" \
+            '{
+              "contents": [{
+                "parts": [{
+                  "text": ($prompt + "\n\n## PR Title\n" + $title + "\n\n## PR Description\n" + $body + "\n\n## Diff\n```\n" + $diff + "\n```")
+                }]
+              }],
+              "generationConfig": {
+                "temperature": 0.1,
+                "maxOutputTokens": 1024,
+                "responseMimeType": "application/json"
+              }
+            }')
+
+          # Call Gemini API
+          RESPONSE=$(curl -s --connect-timeout 10 --max-time 60 \
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$GEMINI_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD")
+
+          # Extract the text response
+          REVIEW=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // empty')
+
+          if [ -z "$REVIEW" ]; then
+            echo "⚠️ Gemini returned empty response."
+            echo "$RESPONSE" | jq . 2>/dev/null || echo "$RESPONSE"
+            echo "skip=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "Raw Gemini response: $REVIEW"
+
+          # Parse verdict
+          VERDICT=$(echo "$REVIEW" | jq -r '.verdict // "RISKY"')
+          SUMMARY=$(echo "$REVIEW" | jq -r '.summary // "Review non disponibile"')
+          ISSUES=$(echo "$REVIEW" | jq -r '.issues // [] | if length == 0 then "Nessun problema trovato." else map("- " + .) | join("\n") end')
+
+          echo "verdict=$VERDICT" >> $GITHUB_OUTPUT
+          echo "summary=$SUMMARY" >> $GITHUB_OUTPUT
+
+          # Save issues to file (multiline)
+          echo "$ISSUES" > /tmp/review_issues.txt
+          echo "skip=false" >> $GITHUB_OUTPUT
+
+      - name: Post review comment
+        if: steps.diff.outputs.empty != 'true' && steps.gemini.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERDICT: ${{ steps.gemini.outputs.verdict }}
+          SUMMARY: ${{ steps.gemini.outputs.summary }}
+        run: |
+          ISSUES=$(cat /tmp/review_issues.txt)
+
+          # Set emoji and label based on verdict
+          case "$VERDICT" in
+            SAFE)   EMOJI="✅"; LABEL="jules-safe" ;;
+            RISKY)  EMOJI="⚠️"; LABEL="jules-risky" ;;
+            BROKEN) EMOJI="❌"; LABEL="jules-broken" ;;
+            *)      EMOJI="❓"; LABEL="jules-risky"; VERDICT="RISKY" ;;
+          esac
+
+          # Build comment
+          COMMENT=$(cat <<EOF
+          ## $EMOJI Jules PR Review — $VERDICT
+
+          **Sommario:** $SUMMARY
+
+          ### Problemi trovati
+          $ISSUES
+
+          ---
+          *Review automatica by Gemini Flash · [Jules Controller](https://github.com/GabryXn/jules-controller)*
+          EOF
+          )
+
+          # Post comment
+          gh pr comment ${{ github.event.pull_request.number }} --body "$COMMENT"
+
+          # Add label (create if not exists)
+          gh label create "$LABEL" --color "$(
+            case "$VERDICT" in
+              SAFE)   echo "0E8A16" ;;
+              RISKY)  echo "FBCA04" ;;
+              BROKEN) echo "D93F0B" ;;
+            esac
+          )" --description "Jules auto-review: $VERDICT" --force 2>/dev/null || true
+          gh pr edit ${{ github.event.pull_request.number }} --add-label "$LABEL"
+
+      - name: Auto-close BROKEN PRs
+        if: steps.gemini.outputs.verdict == 'BROKEN'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "🚫 PR marked as BROKEN. Closing automatically."
+          gh pr close ${{ github.event.pull_request.number }} \
+            --comment "🤖 **Auto-chiusa**: Questa PR è stata classificata come **BROKEN** dalla review automatica. Il codice contiene errori evidenti. Riaprila manualmente se ritieni sia un falso positivo."
+          # Delete the branch to keep the repo clean
+          gh pr view ${{ github.event.pull_request.number }} --json headRefName -q '.headRefName' | xargs -I{} gh api --method DELETE "repos/${{ github.repository }}/git/refs/heads/{}" 2>/dev/null || true
