@@ -73,7 +73,7 @@ function fetchGlobalConfig(token: string): string | null {
     return null;
 }
 
-export function triggerJulesOnGithub(targetRepo: string, prompt: string, configText: string | null, attempt: number = 1): boolean {
+function triggerJulesOnGithub(targetRepo: string, prompt: string, configText: string | null, attempt: number = 1): boolean {
     const token = PropertiesService.getScriptProperties().getProperty('PAT_TOKEN');
     if (!token) {
         console.error('PAT_TOKEN is not defined in Script Properties.');
@@ -201,7 +201,7 @@ function fetchAllTargets(token: string): string[] {
 // TIME-DRIVEN TRIGGER MANAGEMENT
 // ============================================================================
 
-export function createTimeDrivenTriggerForEvent(eventId: string, startTime: any): string {
+function createTimeDrivenTriggerForEvent(eventId: string, startTime: any): string {
     console.log(`Creating time-driven trigger for event ${eventId} at ${startTime}`);
     const trigger = ScriptApp.newTrigger('checkAndTriggerJules')
         .timeBased()
@@ -213,7 +213,7 @@ export function createTimeDrivenTriggerForEvent(eventId: string, startTime: any)
 /**
  * The function fired by the time-driven trigger.
  */
-export function checkAndTriggerJules(e?: any) {
+function checkAndTriggerJules(e?: any) {
     const lock = LockService.getScriptLock();
     try {
         // Wait up to 30 seconds for the lock
@@ -337,12 +337,12 @@ function cleanupTriggers(e?: any) {
 // ONCHANGE CALENDAR TRIGGER (DETECTS CREATIONS, EDITS AND DELETIONS)
 // ============================================================================
 
-export function onCalendarEvent(e: any) {
+function onCalendarEvent(e: any) {
     console.log('Calendar OnChange Event triggered.');
     processCalendarEvents();
 }
 
-export function processCalendarEvents() {
+function processCalendarEvents() {
     const lock = LockService.getScriptLock();
     try {
         lock.waitLock(30000);
@@ -472,7 +472,7 @@ function generateEventChecksum(event: GoogleAppsScript.Calendar.CalendarEvent): 
 /**
  * INITIAL SETUP SCRIPT
  */
-export function setupCalendarTrigger() {
+function setupCalendarTrigger() {
     // ── STEP 1: Delete all old checkAndTriggerJules triggers FIRST ──────────
     // Must happen before wiping state to avoid a race window where an old
     // trigger fires against empty SCHEDULED_EVENTS and writes stale bare keys.
@@ -519,4 +519,17 @@ export function setupCalendarTrigger() {
     processCalendarEvents();
     console.log('✅ Initial calendar scan complete. Setup done.');
 }
+
+// ============================================================================
+// GLOBAL SCOPE EXPOSURE FOR GAS TRIGGERS
+// Assigning to globalThis from within the IIFE bundle exposes these functions
+// as top-level globals, which is required for GAS trigger dispatch to work.
+// DO NOT use module exports here — GAS does not use ESM.
+// ============================================================================
+(globalThis as any).setupCalendarTrigger = setupCalendarTrigger;
+(globalThis as any).onCalendarEvent = onCalendarEvent;
+(globalThis as any).checkAndTriggerJules = checkAndTriggerJules;
+(globalThis as any).processCalendarEvents = processCalendarEvents;
+(globalThis as any).createTimeDrivenTriggerForEvent = createTimeDrivenTriggerForEvent;
+(globalThis as any).triggerJulesOnGithub = triggerJulesOnGithub;
 
