@@ -3,6 +3,8 @@ node_modules/
 dist/
 .clasp.json
 **/.clasp.json
+# Exception: calendar-integration .clasp.json contains only scriptId (no credentials)
+!jules-controller/calendar-integration/.clasp.json
 
 # Logs
 logs
