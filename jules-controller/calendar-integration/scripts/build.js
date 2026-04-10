@@ -19,16 +19,30 @@ async function build() {
     }
 
     try {
+        const outfile = path.resolve(distDir, 'Code.js');
+
         await esbuild.build({
             entryPoints: [path.resolve(srcDir, 'index.ts')],
             bundle: true,
-            outfile: path.resolve(distDir, 'Code.js'),
+            outfile,
             format: 'iife',
             target: 'es2020',
-            // No globalName needed: src/index.ts assigns all GAS entry-points to
-            // globalThis directly, which is the correct way to expose functions
-            // from within an IIFE bundle to the Google Apps Script runtime.
         });
+
+        // Append top-level function stubs so the GAS editor can discover them
+        // in the function dropdown. The IIFE assigns these to globalThis, but
+        // GAS only lists functions declared at the top-level scope.
+        const stubs = [
+            'setupCalendarTrigger',
+            'onCalendarEvent',
+            'checkAndTriggerJules',
+            'processCalendarEvents',
+            'triggerJulesOnGithub',
+        ];
+        const stubCode = '\n// --- GAS top-level function stubs (auto-generated) ---\n' +
+            stubs.map(name => `function ${name}(e) { return globalThis.${name}(e); }`).join('\n') +
+            '\n';
+        fs.appendFileSync(outfile, stubCode);
 
         // Copy appsscript.json to dist
         fs.copyFileSync(
