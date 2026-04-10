@@ -169,8 +169,6 @@ function extractTargetRepos(title: string): string[] {
 function fetchAllTargets(token: string): string[] {
     // visibility=all recupera sia pubblici che privati
     // affiliation=owner recupera solo i repo dell'utente (non quelli in cui è solo collaboratore)
-    const url = `${GITHUB_API_URL}/user/repos?visibility=all&affiliation=owner&per_page=100`;
-
     const options: GoogleAppsScript.URL_Fetch.URLFetchRequestOptions = {
         method: 'get',
         headers: {
@@ -180,20 +178,38 @@ function fetchAllTargets(token: string): string[] {
         muteHttpExceptions: true
     };
 
+    const allRepos: string[] = [];
+    let nextUrl: string | null = `${GITHUB_API_URL}/user/repos?visibility=all&affiliation=owner&per_page=100`;
+
     try {
-        const response = UrlFetchApp.fetch(url, options);
-        if (response.getResponseCode() === 200) {
+        while (nextUrl) {
+            const response = UrlFetchApp.fetch(nextUrl, options);
+            const code = response.getResponseCode();
+
+            if (code !== 200) {
+                console.error(`🚨 Error fetching user repos. Code: ${code}. Body: ${response.getContentText()}`);
+                break;
+            }
+
             const reposData = JSON.parse(response.getContentText());
-            return reposData
+            reposData
                 .filter((repo: any) => !repo.archived) // Esclude archiviati
-                .map((repo: any) => repo.full_name);  // owner/repo
-        } else {
-            console.error(`🚨 Error fetching user repos. Code: ${response.getResponseCode()}. Body: ${response.getContentText()}`);
+                .forEach((repo: any) => allRepos.push(repo.full_name));
+
+            // Segui il link "next" per la pagina successiva (header Link RFC 5988)
+            const linkHeader = response.getHeaders()['Link'] as string | undefined;
+            nextUrl = null;
+            if (linkHeader) {
+                const match = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
+                if (match) nextUrl = match[1];
+            }
         }
     } catch (e) {
         console.error(`❌ Error fetching targets via GitHub API: ${e}`);
     }
-    return [];
+
+    console.log(`📦 fetchAllTargets: found ${allRepos.length} non-archived repos.`);
+    return allRepos;
 }
 
 // ============================================================================
