@@ -1,24 +1,51 @@
 /**
- * GITHUB REPOSITORY DISPATCH
- * URL: https://api.github.com/repos/{owner}/{repo}/actions/workflows/jules_agent.yml/dispatches
+ * JULES CALENDAR INTEGRATION — Google Apps Script
+ *
+ * Monitors Google Calendar for "Jules: owner/repo" events and dispatches
+ * GitHub Actions workflows. Supports one-off AND recurring events.
+ *
+ * Architecture (event-driven, no polling):
+ *   - onCalendarEvent (calendar onChange)    → processCalendarEvents()
+ *   - 6-hour periodic safety-net            → processCalendarEvents()
+ *   - Per-event time-driven trigger          → checkAndTriggerJules()
+ *
+ * Recurring event strategy:
+ *   Up to TRIGGERS_PER_SERIES occurrences per event series are scheduled
+ *   as triggers. When one fires, processCalendarEvents() runs again and
+ *   schedules the next in line. The second trigger acts as a safety net
+ *   if the first invocation fails (timeout, quota, etc.).
+ *   Trigger count = (active series × TRIGGERS_PER_SERIES) + 2 system.
  */
 
 const GITHUB_API_URL = 'https://api.github.com';
-const JULES_EVENT_PREFIX = 'Jules: ';
 const WORKFLOW_NAME = 'jules_agent.yml';
+
+/** How far ahead to scan for future events */
+const LOOKAHEAD_DAYS = 14;
+/** Grace period: don't clean up events until this long after their start */
+const CLEANUP_GRACE_MS = 30 * 60 * 1000; // 30 minutes
+/** Maximum per-event triggers to create (leaves room for system triggers) */
+const MAX_EVENT_TRIGGERS = 17; // 20 GAS limit - 2 system - 1 buffer
+/** How many triggers to keep scheduled per recurring event series.
+ *  2 = next occurrence + safety net in case the first invocation fails. */
+const TRIGGERS_PER_SERIES = 2;
+
+// ============================================================================
+// TYPES
+// ============================================================================
+
+interface ScheduledEvent {
+    time: number;
+    checksum: string;
+    triggerId: string;
+    seriesKey: string;
+    lastTriggered?: number;
+}
 
 // ============================================================================
 // GITHUB API
 // ============================================================================
 
-
-// ============================================================================
-// GITHUB API WITH FALLBACK
-// ============================================================================
-
-/**
- * Recupera il default branch di un repository (es. 'main' o 'master')
- */
 function getDefaultBranch(targetRepo: string, token: string): string {
     const url = `${GITHUB_API_URL}/repos/${targetRepo}`;
     const options: GoogleAppsScript.URL_Fetch.URLFetchRequestOptions = {
@@ -42,9 +69,6 @@ function getDefaultBranch(targetRepo: string, token: string): string {
     return 'main';
 }
 
-/**
- * Recupera la configurazione globale in modo autenticato (supporta repo privati)
- */
 function fetchGlobalConfig(token: string): string | null {
     const configPath = "jules_config.yml";
     const controllerRepo = "GabryXn/jules-controller";
@@ -63,7 +87,6 @@ function fetchGlobalConfig(token: string): string | null {
         const response = UrlFetchApp.fetch(url, options);
         if (response.getResponseCode() === 200) {
             const data = JSON.parse(response.getContentText());
-            // Il contenuto è in base64
             const decoded = Utilities.base64Decode(data.content);
             return Utilities.newBlob(decoded).getDataAsString();
         }
@@ -80,21 +103,18 @@ function triggerJulesOnGithub(targetRepo: string, prompt: string, configText: st
         return false;
     }
 
-    // --- CENTRALIZED CONTROL CHECK (using cached config) ---
     if (configText) {
         const calendarDisabled = /^\s+calendar_automation\s*:\s*false\s*$/m.test(configText);
         if (calendarDisabled) {
-            console.warn(`🛑 Calendar Automation is DISABLED in global config. Skipping dispatch for ${targetRepo}.`);
+            console.warn(`🛑 Calendar Automation is DISABLED. Skipping dispatch for ${targetRepo}.`);
             return false;
         }
     } else {
         console.warn(`⚠️ Global config not provided for ${targetRepo}, proceeding with default (enabled).`);
     }
-    // ---------------------------------
 
-    // Determina il branch di default (es. fix per 'master')
     const defaultBranch = getDefaultBranch(targetRepo, token);
-    console.log(`🔍 Detected default branch for ${targetRepo}: ${defaultBranch}`);
+    console.log(`🔍 Default branch for ${targetRepo}: ${defaultBranch}`);
 
     const url = `${GITHUB_API_URL}/repos/${targetRepo}/actions/workflows/${WORKFLOW_NAME}/dispatches`;
     const payload = {
@@ -114,18 +134,16 @@ function triggerJulesOnGithub(targetRepo: string, prompt: string, configText: st
     };
 
     try {
-        console.log(`[Attempt ${attempt}] Sending dispatch to: ${targetRepo} (branch: ${defaultBranch})`);
+        console.log(`[Attempt ${attempt}] Dispatching to: ${targetRepo} (branch: ${defaultBranch})`);
         const response = UrlFetchApp.fetch(url, options);
         const code = response.getResponseCode();
 
         if (code >= 200 && code < 300) {
-            console.log(`✅ Successfully dispatched Jules on ${targetRepo}. Code: ${code}`);
+            console.log(`✅ Dispatched Jules on ${targetRepo}. Code: ${code}`);
             return true;
         } else {
             console.error(`🚨 Error dispatching to ${targetRepo}. Code: ${code}. Body: ${response.getContentText()}`);
             if (attempt < 3 && code >= 500) {
-                // Retry only on server errors (5xx)
-                console.log('Retrying in 5 seconds...');
                 Utilities.sleep(5000);
                 return triggerJulesOnGithub(targetRepo, prompt, configText, attempt + 1);
             }
@@ -134,7 +152,6 @@ function triggerJulesOnGithub(targetRepo: string, prompt: string, configText: st
     } catch (e: any) {
         console.error(`Exception during Github API call: ${e.message}`);
         if (attempt < 3) {
-            console.log('Retrying in 5 seconds...');
             Utilities.sleep(5000);
             return triggerJulesOnGithub(targetRepo, prompt, configText, attempt + 1);
         }
@@ -142,34 +159,7 @@ function triggerJulesOnGithub(targetRepo: string, prompt: string, configText: st
     }
 }
 
-// ============================================================================
-// REGEX AND PARSING
-// ============================================================================
-
-/**
- * Estrae l'elenco dei repository target (o "all") dal titolo dell'evento.
- * Supporta virgole per targets multipli: "Jules: repo1, repo2 - Descrizione"
- */
-function extractTargetRepos(title: string): string[] {
-    // Regex che cattura tutto ciò che sta tra "Jules:" e il primo spazio-trattino-spazio " - " (o la fine del titolo)
-    const regex = /^\s*jules\s*:\s*(.+?)(?:\s+-\s+.*)?\s*$/i;
-    const match = title.match(regex);
-    if (!match) return [];
-
-    const rawTargets = match[1];
-    // Split per virgola, trim degli spazi e lowercase per "all"
-    return rawTargets.split(',')
-        .map(t => t.trim())
-        .filter(t => t.length > 0)
-        .map(t => t.toLowerCase() === 'all' ? 'all' : t);
-}
-
-/**
- * Recupera l'elenco di tutti i repository dell'account (owner), filtrando quelli archiviati.
- */
 function fetchAllTargets(token: string): string[] {
-    // visibility=all recupera sia pubblici che privati
-    // affiliation=owner,collaborator allinea con master-setup.yml che usa permissions.push == true
     const url = `${GITHUB_API_URL}/user/repos?visibility=all&affiliation=owner,collaborator&per_page=100`;
 
     const options: GoogleAppsScript.URL_Fetch.URLFetchRequestOptions = {
@@ -187,9 +177,9 @@ function fetchAllTargets(token: string): string[] {
             const reposData = JSON.parse(response.getContentText());
             return reposData
                 .filter((repo: any) => !repo.archived && repo.permissions?.push === true)
-                .map((repo: any) => repo.full_name);  // owner/repo
+                .map((repo: any) => repo.full_name);
         } else {
-            console.error(`🚨 Error fetching user repos. Code: ${response.getResponseCode()}. Body: ${response.getContentText()}`);
+            console.error(`🚨 Error fetching user repos. Code: ${response.getResponseCode()}`);
         }
     } catch (e) {
         console.error(`❌ Error fetching targets via GitHub API: ${e}`);
@@ -198,268 +188,33 @@ function fetchAllTargets(token: string): string[] {
 }
 
 // ============================================================================
-// TIME-DRIVEN TRIGGER MANAGEMENT
+// PARSING & UTILITIES
 // ============================================================================
 
-function createTimeDrivenTriggerForEvent(eventId: string, startTime: any): string {
-    console.log(`Creating time-driven trigger for event ${eventId} at ${startTime}`);
-    const trigger = ScriptApp.newTrigger('checkAndTriggerJules')
-        .timeBased()
-        .at(startTime)
-        .create();
-    return trigger.getUniqueId();
+function extractTargetRepos(title: string): string[] {
+    const regex = /^\s*jules\s*:\s*(.+?)(?:\s+-\s+.*)?\s*$/i;
+    const match = title.match(regex);
+    if (!match) return [];
+
+    return match[1].split(',')
+        .map(t => t.trim())
+        .filter(t => t.length > 0)
+        .map(t => t.toLowerCase() === 'all' ? 'all' : t);
 }
 
-/**
- * The function fired by the time-driven trigger.
- */
-function checkAndTriggerJules(e?: any) {
-    const lock = LockService.getScriptLock();
-    try {
-        // Wait up to 30 seconds for the lock
-        lock.waitLock(30000);
-        console.log('checkAndTriggerJules starting...');
-        cleanupTriggers(e); // Delete the current trigger
-
-        const calendar = CalendarApp.getDefaultCalendar();
-        const now = new Date();
-        const nowMs = now.getTime();
-
-        const props = PropertiesService.getScriptProperties();
-        const scheduledStr = props.getProperty('SCHEDULED_EVENTS') || '{}';
-        const scheduledEvents = JSON.parse(scheduledStr);
-        let stateChanged = false;
-
-        // --- CACHE GLOBAL CONFIG ---
-        const token = props.getProperty('PAT_TOKEN') || '';
-        const configText = fetchGlobalConfig(token);
-        // ---------------------------
-
-        // 2-minute window
-        const startWindow = new Date(nowMs - 60000);
-        const endWindow = new Date(nowMs + 120000);
-
-        const events = calendar.getEvents(startWindow, endWindow);
-
-        // Cache for 'all' targets
-        let cachedAllRepos: string[] | null = null;
-
-        events.forEach(event => {
-            const eventId = event.getId();
-            const compositeKey = eventId + '_' + event.getStartTime().getTime(); // unique per occurrence
-            const title = event.getTitle() || '';
-            const targetRepos = extractTargetRepos(title);
-
-            if (targetRepos.length > 0) {
-                const eventStartTime = event.getStartTime().getTime();
-                const diff = Math.abs(eventStartTime - nowMs);
-
-                // Check if already triggered recently (5-minute deduplication)
-                const eventData = scheduledEvents[compositeKey]; // ← use compositeKey
-                const lastTriggered = eventData ? (eventData.lastTriggered || 0) : 0;
-                const minInterval = 5 * 60 * 1000; // 5 minutes
-
-                if (nowMs - lastTriggered < minInterval) {
-                    console.log(`⏩ Skipping event "${title}" (key: ${compositeKey}) - Already triggered recently at ${new Date(lastTriggered)}`);
-                    return;
-                }
-
-                if (diff <= 120000) {
-                    let prompt = event.getDescription() || '';
-
-                    // --- SANITIZE PROMPT ---
-                    prompt = prompt.replace(/<[^>]*>?/gm, '');
-                    prompt = prompt.replace(/&nbsp;/g, ' ')
-                        .replace(/&amp;/g, '&')
-                        .replace(/&lt;/g, '<')
-                        .replace(/&gt;/g, '>')
-                        .replace(/&quot;/g, '"')
-                        .replace(/&#39;/g, "'");
-                    // -----------------------
-
-                    console.log(`🤖 Triggering Jules for targets: ${targetRepos.join(', ')}. Event: "${title}"`);
-
-                    let eventTriggered = false;
-                    targetRepos.forEach(target => {
-                        if (target === 'all') {
-                            if (!cachedAllRepos) {
-                                cachedAllRepos = fetchAllTargets(token);
-                            }
-                            console.log(`🌍 Triggering Jules for ALL managed repositories: ${cachedAllRepos.join(', ')}`);
-                            cachedAllRepos.forEach(repo => {
-                                if (triggerJulesOnGithub(repo, prompt, configText)) eventTriggered = true;
-                            });
-                        } else {
-                            const success = triggerJulesOnGithub(target, prompt, configText);
-                            if (success) {
-                                console.log(`✨ Successfully initiated dispatch for ${target}`);
-                                eventTriggered = true;
-                            } else {
-                                console.error(`🚨 FAILED to initiate dispatch for ${target}.`);
-                            }
-                        }
-                    });
-
-                    if (eventTriggered) {
-                        if (!scheduledEvents[compositeKey]) {
-                            scheduledEvents[compositeKey] = { time: eventStartTime, checksum: generateEventChecksum(event) };
-                        }
-                        scheduledEvents[compositeKey].lastTriggered = nowMs;
-                        stateChanged = true;
-                    }
-                }
-            }
-        });
-
-        if (stateChanged) {
-            props.setProperty('SCHEDULED_EVENTS', JSON.stringify(scheduledEvents));
-        }
-    } catch (e: any) {
-        console.error(`Error in checkAndTriggerJules: ${e.message}`);
-    } finally {
-        lock.releaseLock();
-    }
-}
-
-function cleanupTriggers(e?: any) {
-    if (e && e.triggerUid) {
-        const triggers = ScriptApp.getProjectTriggers();
-        for (const trigger of triggers) {
-            if (trigger.getUniqueId() === e.triggerUid) {
-                ScriptApp.deleteTrigger(trigger);
-                break;
-            }
-        }
-    }
-}
-
-// ============================================================================
-// ONCHANGE CALENDAR TRIGGER (DETECTS CREATIONS, EDITS AND DELETIONS)
-// ============================================================================
-
-function onCalendarEvent(e: any) {
-    console.log('Calendar OnChange Event triggered.');
-    processCalendarEvents();
-}
-
-function processCalendarEvents() {
-    const lock = LockService.getScriptLock();
-    try {
-        lock.waitLock(30000);
-        console.log('Synchronizing calendar events...');
-
-        const calendar = CalendarApp.getDefaultCalendar();
-        const now = new Date();
-        const futureLimit = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000); // look 14 days ahead
-
-        const events = calendar.getEvents(now, futureLimit);
-        const props = PropertiesService.getScriptProperties();
-
-        // State format: { eventId: { time: number, checksum: string, triggerId: string } }
-        const scheduledStr = props.getProperty('SCHEDULED_EVENTS') || '{}';
-        const scheduledEvents = JSON.parse(scheduledStr);
-
-        let stateChanged = false;
-        const activeJulesEvents = new Map<string, GoogleAppsScript.Calendar.CalendarEvent>();
-
-        events.forEach(event => {
-            const title = event.getTitle() || '';
-            if (extractTargetRepos(title).length > 0) {
-                const compositeKey = event.getId() + '_' + event.getStartTime().getTime();
-                activeJulesEvents.set(compositeKey, event);
-            }
-        });
-
-        // 1. Clean up & Handle Edits/Deletions
-        for (const compositeKey in scheduledEvents) {
-            const scheduledData = scheduledEvents[compositeKey];
-            const activeEvent = activeJulesEvents.get(compositeKey); // direct lookup — map is now composite-keyed
-
-            // Se l'evento è passato o non esiste più (cancellato)
-            if (scheduledData.time < now.getTime() || !activeEvent) {
-                if (!activeEvent) console.log(`Event ${compositeKey} deleted or renamed. Cleaning up.`);
-                cancelSurgicalTrigger(scheduledData.triggerId);
-                delete scheduledEvents[compositeKey];
-                stateChanged = true;
-                continue;
-            }
-
-            // Se l'evento è stato modificato (non rischedulare se già scattato)
-            const currentChecksum = generateEventChecksum(activeEvent);
-            if (scheduledData.checksum !== currentChecksum && !scheduledData.lastTriggered) {
-                console.log(`Event modified (occurrence ${compositeKey}). Rescheduling...`);
-                cancelSurgicalTrigger(scheduledData.triggerId);
-
-                const newStartTime = activeEvent.getStartTime();
-                const newCompositeKey = activeEvent.getId() + '_' + newStartTime.getTime();
-                const newTriggerId = createTimeDrivenTriggerForEvent(activeEvent.getId(), newStartTime);
-                delete scheduledEvents[compositeKey];
-                scheduledEvents[newCompositeKey] = {
-                    time: newStartTime.getTime(),
-                    checksum: currentChecksum,
-                    triggerId: newTriggerId
-                };
-                stateChanged = true;
-            }
-        }
-
-        // 2. New Creations
-        activeJulesEvents.forEach((event, compositeKey) => {
-            if (!scheduledEvents[compositeKey]) {
-                const startTime = event.getStartTime();
-                // Skip events starting in the past (extra safety)
-                if (startTime.getTime() < now.getTime()) return;
-
-                const checksum = generateEventChecksum(event);
-                const triggerId = createTimeDrivenTriggerForEvent(event.getId(), startTime);
-
-                console.log(`New event detected: ${event.getTitle()} (${compositeKey}). Scheduling trigger.`);
-                scheduledEvents[compositeKey] = {
-                    time: startTime.getTime(),
-                    checksum: checksum,
-                    triggerId: triggerId
-                };
-                stateChanged = true;
-            }
-        });
-
-        if (stateChanged) {
-            props.setProperty('SCHEDULED_EVENTS', JSON.stringify(scheduledEvents));
-        }
-    } catch (e: any) {
-        console.error(`Error in processCalendarEvents: ${e.message}`);
-    } finally {
-        lock.releaseLock();
-    }
-}
-
-/**
- * Cancel a specific trigger that was previously scheduled for a known eventId.
- * Because trigger functions don't receive custom parameters, we find the trigger
- * by looking at all checkAndTriggerJules triggers and finding the one closest to
- * the previously scheduled time (or just clean them and rely on the next pass).
- * But since we can't easily map trigger to eventId without properties, a better way
- * is just wiping all outstanding checkAndTriggerJules triggers and letting the script rebuild them.
- * This is totally safe since processCalendarEvents scans the next X days anyway.
- */
-/**
- * Cancella chirugicamente UN solo trigger basandosi sul suo ID univoco.
- */
-function cancelSurgicalTrigger(triggerId: string) {
-    if (!triggerId) return;
-    const triggers = ScriptApp.getProjectTriggers();
-    for (const t of triggers) {
-        if (t.getUniqueId() === triggerId) {
-            ScriptApp.deleteTrigger(t);
-            console.log(`Surgical cleanup of trigger: ${triggerId}`);
-            return;
-        }
-    }
+function sanitizePrompt(raw: string): string {
+    return raw
+        .replace(/<[^>]*>?/gm, '')
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'");
 }
 
 function generateEventChecksum(event: GoogleAppsScript.Calendar.CalendarEvent): string {
     const data = `${event.getStartTime().getTime()}|${event.getTitle()}|${event.getDescription()}`;
-    // Simple string hash function for checksum
     let hash = 0;
     for (let i = 0; i < data.length; i++) {
         const char = data.charCodeAt(i);
@@ -470,66 +225,338 @@ function generateEventChecksum(event: GoogleAppsScript.Calendar.CalendarEvent): 
 }
 
 /**
- * INITIAL SETUP SCRIPT
+ * Returns a stable key identifying the event series.
+ * Recurring events share a series key; one-off events use their composite key.
  */
-function setupCalendarTrigger() {
-    // ── STEP 1: Delete all old checkAndTriggerJules triggers FIRST ──────────
-    // Must happen before wiping state to avoid a race window where an old
-    // trigger fires against empty SCHEDULED_EVENTS and writes stale bare keys.
-    ScriptApp.getProjectTriggers()
-        .filter(t => t.getHandlerFunction() === 'checkAndTriggerJules')
-        .forEach(t => ScriptApp.deleteTrigger(t));
-    console.log('✅ Cleaned up old checkAndTriggerJules triggers.');
-
-    // ── STEP 2: Wipe stale state (safe now — no old triggers can fire) ───────
-    PropertiesService.getScriptProperties().deleteProperty('SCHEDULED_EVENTS');
-    console.log('✅ Cleared SCHEDULED_EVENTS state (migration wipe).');
-
-    // ── STEP 3: Set up onCalendarEvent trigger (idempotent) ─────────────────
-    const hasCalendarTrigger = ScriptApp.getProjectTriggers()
-        .some(t => t.getHandlerFunction() === 'onCalendarEvent');
-    if (!hasCalendarTrigger) {
-        const calendar = CalendarApp.getDefaultCalendar();
-        ScriptApp.newTrigger('onCalendarEvent')
-            .forUserCalendar(calendar.getId())
-            .onEventUpdated()
-            .create();
-        console.log('✅ Calendar OnChange trigger created.');
-    } else {
-        console.log('ℹ️  Calendar OnChange trigger already exists.');
+function getSeriesKey(event: GoogleAppsScript.Calendar.CalendarEvent): string {
+    if (event.isRecurringEvent()) {
+        try {
+            return 'series_' + event.getEventSeries().getId();
+        } catch {
+            // Fallback if getEventSeries() throws (e.g. deleted series)
+        }
     }
+    return event.getId() + '_' + event.getStartTime().getTime();
+}
 
-    // ── STEP 4: Set up 6-hour periodic rescan trigger (idempotent) ──────────
-    // Needed for recurring events: ensures future occurrences are scheduled
-    // as they enter the 14-day window, even without calendar edits.
-    const hasPeriodicTrigger = ScriptApp.getProjectTriggers()
-        .some(t => t.getHandlerFunction() === 'processCalendarEvents' &&
-                   t.getTriggerSource() === ScriptApp.TriggerSource.CLOCK);
-    if (!hasPeriodicTrigger) {
-        ScriptApp.newTrigger('processCalendarEvents')
-            .timeBased()
-            .everyHours(6)
-            .create();
-        console.log('✅ 6-hour periodic processCalendarEvents trigger created.');
-    } else {
-        console.log('ℹ️  Periodic trigger already exists.');
+// ============================================================================
+// TRIGGER MANAGEMENT
+// ============================================================================
+
+function createTimeDrivenTriggerForEvent(eventId: string, startTime: Date): string {
+    console.log(`⏰ Creating trigger for event ${eventId} at ${startTime}`);
+    const trigger = ScriptApp.newTrigger('checkAndTriggerJules')
+        .timeBased()
+        .at(startTime)
+        .create();
+    return trigger.getUniqueId();
+}
+
+function deleteTriggerById(triggerId: string) {
+    if (!triggerId) return;
+    for (const t of ScriptApp.getProjectTriggers()) {
+        if (t.getUniqueId() === triggerId) {
+            ScriptApp.deleteTrigger(t);
+            console.log(`🧹 Deleted trigger: ${triggerId}`);
+            return;
+        }
     }
+}
 
-    // ── STEP 5: Run initial scan to rebuild state with composite keys ────────
+// ============================================================================
+// CORE: CALENDAR EVENT PROCESSING
+// ============================================================================
+
+function onCalendarEvent(e: any) {
+    console.log('Calendar OnChange event fired.');
     processCalendarEvents();
-    console.log('✅ Initial calendar scan complete. Setup done.');
+}
+
+/**
+ * Scans the calendar, manages scheduled event state, and creates/removes
+ * per-event triggers. For recurring events, only the next occurrence per
+ * series is scheduled — keeping trigger count low.
+ */
+function processCalendarEvents() {
+    const lock = LockService.getScriptLock();
+    try {
+        lock.waitLock(30000);
+        console.log('processCalendarEvents starting...');
+
+        const calendar = CalendarApp.getDefaultCalendar();
+        const now = new Date();
+        const nowMs = now.getTime();
+        const scanEnd = new Date(nowMs + LOOKAHEAD_DAYS * 24 * 60 * 60 * 1000);
+
+        const props = PropertiesService.getScriptProperties();
+        const scheduledStr = props.getProperty('SCHEDULED_EVENTS') || '{}';
+        const scheduledEvents: Record<string, ScheduledEvent> = JSON.parse(scheduledStr);
+        let stateChanged = false;
+
+        // ── Build map of active Jules events (includes recurring occurrences) ──
+        const calEvents = calendar.getEvents(now, scanEnd);
+        const activeJulesEvents = new Map<string, GoogleAppsScript.Calendar.CalendarEvent>();
+
+        for (const event of calEvents) {
+            if (extractTargetRepos(event.getTitle() || '').length > 0) {
+                const key = event.getId() + '_' + event.getStartTime().getTime();
+                activeJulesEvents.set(key, event);
+            }
+        }
+
+        // ── Phase 1: Cleanup past/deleted events, detect modifications ─────────
+
+        for (const key in scheduledEvents) {
+            const data = scheduledEvents[key];
+            const activeEvent = activeJulesEvents.get(key);
+
+            // Past (beyond grace period) or deleted from calendar
+            if (data.time + CLEANUP_GRACE_MS < nowMs || !activeEvent) {
+                if (!activeEvent && data.time >= nowMs) {
+                    console.log(`🗑️ Event ${key} deleted/renamed. Cleaning up.`);
+                }
+                deleteTriggerById(data.triggerId);
+                delete scheduledEvents[key];
+                stateChanged = true;
+                continue;
+            }
+
+            // Modified (checksum changed) and not yet fired — reschedule
+            if (!data.lastTriggered) {
+                const currentChecksum = generateEventChecksum(activeEvent);
+                if (data.checksum !== currentChecksum) {
+                    console.log(`✏️ Event ${key} modified. Rescheduling.`);
+                    deleteTriggerById(data.triggerId);
+
+                    const newTime = activeEvent.getStartTime().getTime();
+                    const newKey = activeEvent.getId() + '_' + newTime;
+                    const newTriggerId = createTimeDrivenTriggerForEvent(activeEvent.getId(), activeEvent.getStartTime());
+
+                    delete scheduledEvents[key];
+                    scheduledEvents[newKey] = {
+                        time: newTime,
+                        checksum: currentChecksum,
+                        triggerId: newTriggerId,
+                        seriesKey: getSeriesKey(activeEvent)
+                    };
+                    stateChanged = true;
+                }
+            }
+        }
+
+        // ── Phase 2: Count pending triggers per series ──────────────────────────
+
+        const pendingPerSeries = new Map<string, number>();
+        let activeTriggerCount = 0;
+        for (const key in scheduledEvents) {
+            const data = scheduledEvents[key];
+            if (!data.lastTriggered && data.time > nowMs) {
+                pendingPerSeries.set(data.seriesKey, (pendingPerSeries.get(data.seriesKey) || 0) + 1);
+                activeTriggerCount++;
+            }
+        }
+
+        // ── Phase 3: Schedule next occurrences per series (up to TRIGGERS_PER_SERIES) ─
+
+        // Collect unscheduled future occurrences grouped by series, sorted by time
+        const unscheduledPerSeries = new Map<string, { key: string; event: GoogleAppsScript.Calendar.CalendarEvent; time: number }[]>();
+
+        activeJulesEvents.forEach((event, compositeKey) => {
+            const startMs = event.getStartTime().getTime();
+            if (startMs <= nowMs) return;                  // past
+            if (scheduledEvents[compositeKey]) return;     // already tracked
+
+            const seriesKey = getSeriesKey(event);
+            const pending = pendingPerSeries.get(seriesKey) || 0;
+            const slotsForSeries = TRIGGERS_PER_SERIES - pending;
+            if (slotsForSeries <= 0) return;               // series already fully scheduled
+
+            const list = unscheduledPerSeries.get(seriesKey) || [];
+            list.push({ key: compositeKey, event, time: startMs });
+            unscheduledPerSeries.set(seriesKey, list);
+        });
+
+        // For each series, keep only the earliest N unscheduled occurrences (N = available slots)
+        const candidates: { seriesKey: string; key: string; event: GoogleAppsScript.Calendar.CalendarEvent; time: number }[] = [];
+        unscheduledPerSeries.forEach((list, seriesKey) => {
+            const pending = pendingPerSeries.get(seriesKey) || 0;
+            const slots = TRIGGERS_PER_SERIES - pending;
+            list.sort((a, b) => a.time - b.time);
+            for (let i = 0; i < Math.min(slots, list.length); i++) {
+                candidates.push({ seriesKey, ...list[i] });
+            }
+        });
+
+        // Sort all candidates by time (nearest first) and schedule within cap
+        candidates.sort((a, b) => a.time - b.time);
+
+        for (const { seriesKey, key, event, time } of candidates) {
+            if (activeTriggerCount >= MAX_EVENT_TRIGGERS) {
+                console.warn(`⚠️ Trigger cap reached (${MAX_EVENT_TRIGGERS}). Remaining events deferred to next rescan.`);
+                break;
+            }
+
+            const triggerId = createTimeDrivenTriggerForEvent(event.getId(), event.getStartTime());
+            scheduledEvents[key] = {
+                time,
+                checksum: generateEventChecksum(event),
+                triggerId,
+                seriesKey
+            };
+            pendingPerSeries.set(seriesKey, (pendingPerSeries.get(seriesKey) || 0) + 1);
+            stateChanged = true;
+            activeTriggerCount++;
+            console.log(`📅 Scheduled: ${event.getTitle()} at ${new Date(time)} (series: ${seriesKey}, slot ${pendingPerSeries.get(seriesKey)}/${TRIGGERS_PER_SERIES})`);
+        }
+
+        if (stateChanged) {
+            props.setProperty('SCHEDULED_EVENTS', JSON.stringify(scheduledEvents));
+        }
+
+        console.log(`processCalendarEvents done. Tracking ${Object.keys(scheduledEvents).length} events, ${activeTriggerCount} active triggers.`);
+    } catch (e: any) {
+        console.error(`Error in processCalendarEvents: ${e.message}`);
+    } finally {
+        lock.releaseLock();
+    }
+}
+
+// ============================================================================
+// CORE: DISPATCH (fired by per-event time-driven triggers)
+// ============================================================================
+
+/**
+ * Fired by a time-driven trigger at the event's start time.
+ * Dispatches the GitHub workflow, then triggers a rescan to schedule
+ * the next occurrence if the event is recurring.
+ */
+function checkAndTriggerJules(e?: any) {
+    const lock = LockService.getScriptLock();
+    try {
+        lock.waitLock(30000);
+        console.log('checkAndTriggerJules starting...');
+
+        // Clean up the trigger that fired this invocation
+        if (e && e.triggerUid) {
+            deleteTriggerById(e.triggerUid);
+        }
+
+        const calendar = CalendarApp.getDefaultCalendar();
+        const now = new Date();
+        const nowMs = now.getTime();
+
+        const props = PropertiesService.getScriptProperties();
+        const token = props.getProperty('PAT_TOKEN') || '';
+        const configText = fetchGlobalConfig(token);
+
+        const scheduledStr = props.getProperty('SCHEDULED_EVENTS') || '{}';
+        const scheduledEvents: Record<string, ScheduledEvent> = JSON.parse(scheduledStr);
+        let stateChanged = false;
+
+        // Find events in a window around now (GAS triggers can fire slightly late)
+        const windowStart = new Date(nowMs - 5 * 60 * 1000);  // 5 min ago
+        const windowEnd = new Date(nowMs + 5 * 60 * 1000);    // 5 min ahead
+        const events = calendar.getEvents(windowStart, windowEnd);
+
+        let cachedAllRepos: string[] | null = null;
+
+        for (const event of events) {
+            const title = event.getTitle() || '';
+            const targetRepos = extractTargetRepos(title);
+            if (targetRepos.length === 0) continue;
+
+            const compositeKey = event.getId() + '_' + event.getStartTime().getTime();
+            const data = scheduledEvents[compositeKey];
+
+            // Only dispatch if tracked and not yet triggered
+            if (!data || data.lastTriggered) continue;
+
+            const prompt = sanitizePrompt(event.getDescription() || '');
+            console.log(`🤖 Dispatching: "${title}" → ${targetRepos.join(', ')}`);
+
+            let dispatched = false;
+            for (const target of targetRepos) {
+                if (target === 'all') {
+                    if (!cachedAllRepos) cachedAllRepos = fetchAllTargets(token);
+                    console.log(`🌍 Dispatching to ALL repos: ${cachedAllRepos.join(', ')}`);
+                    for (const repo of cachedAllRepos) {
+                        if (triggerJulesOnGithub(repo, prompt, configText)) dispatched = true;
+                    }
+                } else {
+                    if (triggerJulesOnGithub(target, prompt, configText)) {
+                        console.log(`✨ Dispatched for ${target}`);
+                        dispatched = true;
+                    } else {
+                        console.error(`🚨 FAILED to dispatch for ${target}`);
+                    }
+                }
+            }
+
+            if (dispatched) {
+                scheduledEvents[compositeKey].lastTriggered = nowMs;
+                stateChanged = true;
+                console.log(`✅ Dispatch complete: ${compositeKey}`);
+            }
+        }
+
+        if (stateChanged) {
+            props.setProperty('SCHEDULED_EVENTS', JSON.stringify(scheduledEvents));
+        }
+    } catch (e: any) {
+        console.error(`Error in checkAndTriggerJules: ${e.message}`);
+    } finally {
+        lock.releaseLock();
+    }
+
+    // Outside the lock: rescan to schedule the next occurrence for recurring events
+    processCalendarEvents();
+}
+
+// ============================================================================
+// SETUP (run once from the Apps Script editor)
+// ============================================================================
+
+function setupCalendarTrigger() {
+    const triggers = ScriptApp.getProjectTriggers();
+
+    // ── STEP 1: Clean up ALL existing project triggers ──────────────────────
+    // Safe full reset — we recreate only what's needed below.
+    for (const t of triggers) {
+        ScriptApp.deleteTrigger(t);
+    }
+    console.log('✅ Removed all existing triggers.');
+
+    // ── STEP 2: Wipe stale state ────────────────────────────────────────────
+    PropertiesService.getScriptProperties().deleteProperty('SCHEDULED_EVENTS');
+    console.log('✅ Cleared SCHEDULED_EVENTS state.');
+
+    // ── STEP 3: Calendar onChange trigger ────────────────────────────────────
+    const calendar = CalendarApp.getDefaultCalendar();
+    ScriptApp.newTrigger('onCalendarEvent')
+        .forUserCalendar(calendar.getId())
+        .onEventUpdated()
+        .create();
+    console.log('✅ Calendar onChange trigger created.');
+
+    // ── STEP 4: 6-hour periodic safety-net ──────────────────────────────────
+    // Catches recurring occurrences entering the lookahead window and
+    // recovers from any missed onChange events.
+    ScriptApp.newTrigger('processCalendarEvents')
+        .timeBased()
+        .everyHours(6)
+        .create();
+    console.log('✅ 6-hour periodic safety-net trigger created.');
+
+    // ── STEP 5: Initial scan ────────────────────────────────────────────────
+    processCalendarEvents();
+    console.log('✅ Initial scan complete. Setup done.');
 }
 
 // ============================================================================
 // GLOBAL SCOPE EXPOSURE FOR GAS TRIGGERS
-// Assigning to globalThis from within the IIFE bundle exposes these functions
-// as top-level globals, which is required for GAS trigger dispatch to work.
-// DO NOT use module exports here — GAS does not use ESM.
 // ============================================================================
 (globalThis as any).setupCalendarTrigger = setupCalendarTrigger;
 (globalThis as any).onCalendarEvent = onCalendarEvent;
 (globalThis as any).checkAndTriggerJules = checkAndTriggerJules;
 (globalThis as any).processCalendarEvents = processCalendarEvents;
-(globalThis as any).createTimeDrivenTriggerForEvent = createTimeDrivenTriggerForEvent;
 (globalThis as any).triggerJulesOnGithub = triggerJulesOnGithub;
-
