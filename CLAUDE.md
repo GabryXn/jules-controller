@@ -66,7 +66,18 @@ Gli orari in `jules_config.yml` sono in ora di Roma (CET/CEST). `sync-schedules.
 
 ### Calendar Integration
 
-Il modulo Apps Script (`calendar-integration/src/index.ts`) monitora gli eventi del calendario. Un evento deve avere nel titolo la sintassi `Jules: owner/repo` per essere riconosciuto. Supporta retry esponenziale (3 tentativi, 5s backoff) e deduplicazione a 5 minuti tramite `PropertiesService`.
+Il modulo Apps Script (`calendar-integration/src/index.ts`) monitora gli eventi del calendario. Sintassi titolo supportata:
+- `Jules: owner/repo` — singolo repository
+- `Jules: owner/a, owner/b` — repository multipli
+- `Jules: all` — tutti i repository con push access
+
+Funzionalità principali:
+- **Retry esponenziale**: 3 tentativi, 5s backoff per errori 5xx
+- **Supporto ricorrenze**: pianifica fino a 2 trigger per serie (next + safety net) entro i 20 trigger GAS
+- **Rilevamento modifiche**: checksum per evento, rescheduling automatico se titolo/descrizione/orario cambiano
+- **Safety-net periodico**: trigger ogni 6 ore che rescansiona il calendario e pianifica nuove occorrenze
+- **Finestra di esecuzione**: ±5 minuti per tollerare ritardi trigger GAS
+- **Stato persistente**: `PropertiesService` conserva `SCHEDULED_EVENTS` (JSON) tra esecuzioni
 
 ### Pattern di sicurezza
 
@@ -79,9 +90,10 @@ Il modulo Apps Script (`calendar-integration/src/index.ts`) monitora gli eventi 
 
 | Workflow | Trigger | Scopo |
 |---|---|---|
-| `master-setup.yml` | Cron UTC 02:00 | Setup universale: secrets, template, labels, branch protection |
+| `master-setup.yml` | Cron UTC 02:00 | Setup universale: secrets, template, labels, branch protection, reviewer deployment |
 | `controller.yml` | Cron UTC 03:00 | Dispatcher principale: legge targets e attiva Jules |
-| `auto-config-sync.yml` | Push su `jules_config.yml` | Sincronizza Rome Time → UTC nei workflow |
+| `auto-config-sync.yml` | Push su `jules_config.yml` / Cron UTC 00:00 | Sincronizza Rome Time → UTC nei workflow |
+| `clasp-deploy-calendar.yml` | Push su `calendar-integration/**` | Build TypeScript + clasp push su Apps Script |
 | `jules_agent.yml` (template) | `workflow_dispatch` / issue label | Eseguito nei repo target, invoca Jules AI |
 | `jules_reviewer.yml` (template) | `pull_request` (opened/sync) | Review automatica PR con Gemini Flash (repo privati) |
 
@@ -101,7 +113,13 @@ Secrets necessari nel controller: `GEMINI_API_KEY` (gratuita da aistudio.google.
 
 ## Build System (Calendar Integration)
 
-Il bundler è `esbuild` configurato in `calendar-integration/build.js`. Produce un IIFE wrappato (`Code.js`) compatibile con Google Apps Script V8 runtime. Il `tsconfig.json` usa target ES2022 con strict mode.
+Il bundler è `esbuild` configurato in `calendar-integration/scripts/build.js`. Pipeline:
+
+1. **esbuild** compila `src/index.ts` → `dist/Code.js` (formato IIFE, target ES2020)
+2. **GAS function stubs**: il build appende automaticamente dichiarazioni `function` top-level che delegano a `globalThis`. Questo è necessario perché GAS riconosce le funzioni nel dropdown dell'editor solo se dichiarate a scope globale — le assegnazioni `globalThis.fn = fn` dentro un IIFE non sono sufficienti per la UI, ma funzionano per i trigger che invocano per nome.
+3. **appsscript.json** viene copiato in `dist/` (timezone Europe/Rome, runtime V8)
+
+Il `tsconfig.json` usa target ES2022 con strict mode. Il deploy CI avviene via `clasp-deploy-calendar.yml`.
 
 ## Prompt Library
 
@@ -109,6 +127,7 @@ Il bundler è `esbuild` configurato in `calendar-integration/build.js`. Produce 
 - **Bug Hunt & Cleanup** — Qualità del codice
 - **Security Audit** — Scansione vulnerabilità
 - **Documentation Refresher** — Manutenzione documentazione
+- **Dead Code & Import Cleanup** — Rimozione import/variabili inutilizzate e codice commentato obsoleto
 
 ## ⚠️ Repository Pubblica — Sicurezza
 

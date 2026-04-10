@@ -20,6 +20,7 @@
   - [7. Branch Protection Automatica](#7-branch-protection-automatica)
   - [8. Deploy Universale Clasp](#8-deploy-universale-clasp-clasp_deployyml)
   - [9. Prompt Library](#9-prompt-library-promptsmd)
+  - [10. Review Automatica PR](#10-review-automatica-pr)
 - [Configurazione Iniziale](#-configurazione-iniziale)
 - [Struttura del Repository](#-struttura-del-repository)
 - [Installazione Calendar Integration](#-installazione-calendar-integration)
@@ -46,15 +47,20 @@ graph TD
 
     subgraph "Target Repositories"
         AGT[jules_agent.yml<br/>Deployed Agent]
+        REVW[jules_reviewer.yml<br/>Gemini Reviewer - privati]
+        CR[.coderabbit.yaml<br/>CodeRabbit - pubblici]
         KEY[JULES_API_KEY Secret]
         LBL["Label: jules 🟣"]
         BP["Branch Protection 🛡️"]
         ISS["Issue + Label jules"]
+        PR["Pull Request"]
     end
 
     subgraph "External Services"
         JULES[Google Jules AI]
         GCAL[Google Calendar]
+        GEMINI[Gemini 2.0 Flash]
+        CODERABBIT[CodeRabbit App]
     end
 
     CFG --> SYNC
@@ -65,6 +71,8 @@ graph TD
     CTRL -->|workflow_dispatch| AGT
     SETUP -->|Inietta| KEY
     SETUP -->|Deploys| AGT
+    SETUP -->|Deploys| REVW
+    SETUP -->|Deploys| CR
     SETUP -->|Crea| LBL
     SETUP -->|Configura| BP
     TMPL -->|Copiato da| SETUP
@@ -72,7 +80,10 @@ graph TD
     CAL -->|workflow_dispatch| AGT
     GCAL -->|OnChange Event| CAL
     AGT -->|Invoke| JULES
-    JULES -->|Crea PR| AGT
+    JULES -->|Crea| PR
+    PR -->|Trigger| REVW
+    REVW -->|Review via| GEMINI
+    PR -->|Review via| CODERABBIT
 ```
 
 ---
@@ -110,12 +121,14 @@ Il workflow che garantisce che **ogni repository** dell'account sia sempre allin
 **Azioni Sequenziali (per ogni repository):**
 
 1. 🔑 **Iniezione `JULES_API_KEY`**: Sincronizza il segreto API su ogni repo target.
-2. 📄 **Deployment `jules_agent.yml`**: Copia l'ultima versione del template agent nel percorso `.github/workflows/`.
-3. 🏷️ **Creazione Label `jules`**: Crea (o verifica l'esistenza) della label viola (`#715cd7`) per il trigger via Issue.
-4. 🛡️ **Branch Protection**: Configura automaticamente la protezione del branch di default (vedi [sezione dedicata](#7-branch-protection-automatica)).
-5. 🧹 **Auto-delete Branches**: Abilita l'eliminazione automatica dei branch una volta mergiati.
+2. 📄 **Deployment `jules_agent.yml`**: Copia l'ultima versione del template agent nel percorso `.github/workflows/`. SHA-check per skip se già aggiornato.
+3. 🔍 **Deployment Reviewer**: Nei repo **privati** installa `jules_reviewer.yml` (Gemini Flash); nei repo **pubblici** installa `.coderabbit.yaml` (CodeRabbit). Controllato dal flag `pr_review`.
+4. 🚀 **Deploy Clasp** (condizionale): Se il repo contiene un `.clasp.json`, viene iniettato `clasp_deploy.yml` e sincronizzato il secret `CLASPRC_JSON`. Controllato dal flag `clasp_deployment`.
+5. 🏷️ **Creazione Label `jules`**: Crea (o aggiorna via POST→PATCH) la label viola (`#6B46C1`) per il trigger via Issue.
+6. 🛡️ **Branch Protection**: Configura automaticamente la protezione del branch di default (vedi [sezione dedicata](#7-branch-protection-automatica)).
+7. 🧹 **Auto-delete Branches**: Abilita l'eliminazione automatica dei branch una volta mergiati.
 
-**Vantaggio**: L'esecuzione sequenziale garantisce che i segreti siano pronti prima del deployment dei workflow, eliminando ogni rischio di race condition.
+**Vantaggio**: Discovery paginata via `gh api --paginate` con isolamento per-repo in subshell: un errore su un repo non blocca gli altri. I segreti sono iniettati prima del deployment dei workflow, eliminando race condition.
 
 ---
 
@@ -140,25 +153,37 @@ Grazie al workflow `jules_agent.yml` deployato in ogni repo (pubblico o **privat
 
 Jules può essere innescato **al minuto esatto** creando un evento sul tuo Google Calendar. L'architettura è 100% event-driven e non usa polling fisso.
 
-#### Come Funziona
+#### Sintassi del Titolo Evento
 
-1. **Crei un evento** nel tuo calendario con il titolo: `Jules: tuo-username/tuo-repo`.
-2. Nella **descrizione** dell'evento scrivi il prompt (le istruzioni per Jules).
-3. Il trigger **OnChange** di Google Calendar rileva l'evento e crea un trigger temporale "usa-e-getta" programmato esattamente all'orario di inizio.
-4. All'orario stabilito, il trigger si attiva, invia la richiesta di `workflow_dispatch` a GitHub, e poi **si autodistrugge**.
+| Formato | Effetto |
+| :--- | :--- |
+| `Jules: owner/repo` | Dispatcha su un singolo repository |
+| `Jules: owner/repo1, owner/repo2` | Dispatcha su più repository separati da virgola |
+| `Jules: all` | Dispatcha su **tutti** i repository dell'account con push access |
+
+#### Come Funziona (eventi singoli e ricorrenti)
+
+1. **Crei un evento** nel tuo calendario con uno dei titoli sopra. La descrizione diventa il prompt per Jules.
+2. Il trigger **OnChange** di Google Calendar rileva l'evento e crea uno o più trigger temporali nell'arco dei prossimi 14 giorni.
+3. Al momento dell'evento, il trigger si attiva, invia il `workflow_dispatch` a GitHub e aggiorna lo stato interno.
+4. Se l'evento è **ricorrente**, il sistema pianifica automaticamente le prossime 2 occorrenze (next + safety net) e riscansiona il calendario al termine dell'esecuzione.
+5. Un trigger periodico a **6 ore** funge da safety-net: recupera eventi persi e pianifica occorrenze future entrate nella finestra di 14 giorni.
 
 #### Caratteristiche Avanzate
 
 | Feature | Dettaglio |
 | :--- | :--- |
 | **Regex Flessibile** | Il titolo è case-insensitive: `Jules: user/repo`, `jules : user/repo` sono tutti validi |
+| **Target Multipli** | Un singolo evento può targettare più repo (`owner/a, owner/b`) o tutti i repo (`all`) |
 | **Rilevamento Branch** | Lo script rileva automaticamente il branch di default del repo (`main` o `master`) |
-| **Sanificazione Prompt** | I tag HTML e le entità speciali (es. `<code>`, `&nbsp;`) vengono rimossi automaticamente dalla descrizione dell'evento |
-| **Protezione da Duplicati** | `LockService` impedisce esecuzioni parallele. Un checksum per ogni evento garantisce che al massimo un solo trigger sia attivo per evento |
-| **Cleanup Chirurgico** | Ogni trigger è tracciato con un ID univoco (`triggerId`). Quando un evento viene modificato o cancellato, viene rimosso solo il trigger specifico associato |
-| **Finestra Temporale** | Il sistema cerca eventi in una finestra di ±2 minuti rispetto all'orario corrente |
-| **Retry con Backoff** | In caso di errori server (5xx), lo script riprova fino a 3 volte con un intervallo di 5 secondi |
-| **Controllo Centralizzato** | Rispetta il flag `calendar_automation` in `jules_config.yml`. Lo recupera tramite API autenticata (supporto repo privati) |
+| **Sanificazione Prompt** | I tag HTML e le entità speciali (es. `<code>`, `&nbsp;`) vengono rimossi dalla descrizione |
+| **Supporto Ricorrenze** | Gli eventi ricorrenti sono supportati nativamente. Il sistema pianifica fino a 2 trigger per serie (next + safety net) per stare entro il limite GAS di 20 trigger |
+| **Rilevamento Modifiche** | Checksum per evento: se titolo, descrizione o orario cambiano, il trigger viene rimosso e ricreato automaticamente |
+| **Cleanup Chirurgico** | Ogni trigger è tracciato con un ID univoco (`triggerId`). Quando un evento viene eliminato dal calendario, viene rimosso solo il trigger specifico |
+| **Finestra Temporale** | Al momento dell'esecuzione, il sistema cerca eventi in una finestra di ±5 minuti per tollerare lieve ritardo dei trigger GAS |
+| **Retry con Backoff** | In caso di errori server (5xx), lo script riprova fino a 3 volte con 5 secondi di attesa |
+| **Controllo Centralizzato** | Rispetta il flag `calendar_automation` in `jules_config.yml`. Recuperato via API autenticata (supporto repo privati) |
+| **Lock Concorrenza** | `LockService` (30s timeout) garantisce che `processCalendarEvents` non venga eseguito in parallelo |
 
 ---
 
@@ -168,22 +193,31 @@ Un unico file YAML per governare l'intero ecosistema. Modificando un singolo fla
 
 ```yaml
 features:
-  cyclic_automation: true     # Attiva/Disattiva l'esecuzione notturna
-  issue_automation: true      # Attiva/Disattiva la risposta alle Issue
-  calendar_automation: true   # Attiva/Disattiva i trigger da calendario
-  workflow_deployment: true   # Attiva/Disattiva la sincronizzazione dei repo
+  cyclic_automation: true      # Attiva/Disattiva l'esecuzione notturna (controller.yml)
+  issue_automation: true       # Attiva/Disattiva la risposta alle Issue (jules_agent.yml)
+  calendar_automation: true    # Attiva/Disattiva i trigger da calendario (Apps Script)
+  workflow_deployment: true    # Attiva/Disattiva la sincronizzazione dei repo (master-setup.yml)
+  clasp_deployment: true       # Attiva/Disattiva il deploy Clasp automatico (master-setup.yml)
+  pr_review: true              # Attiva/Disattiva la review automatica PR (master-setup.yml)
 
 schedules:
   setup_sync_time: "03:00"           # Orario del Setup Universale (Rome Time)
   master_controller_time: "04:00"    # Orario del Controller Ciclico (Rome Time)
+  auto_config_sync_time: "01:00"     # Orario del safety-check auto-config-sync (Rome Time)
+
+excluded_repos:
+  - "GabryXn/jules-controller"       # Repo esclusi dal setup universale
 ```
 
 **Come viene usato:**
 
-- Il flag `cyclic_automation` viene letto da `controller.yml` prima di lanciare le automazioni.
-- Il flag `issue_automation` viene letto dal `jules_agent.yml` deployato in ogni repo target (fetch remoto via `curl`).
-- Il flag `calendar_automation` viene letto dallo script Apps Script prima di ogni dispatch.
-- Il flag `workflow_deployment` viene letto da `master-setup.yml` prima di distribuire i workflow.
+- `cyclic_automation` → letto da `controller.yml` prima di lanciare le automazioni.
+- `issue_automation` → letto da `jules_agent.yml` (fetch remoto via `curl`) nei repo target.
+- `calendar_automation` → letto dall'Apps Script prima di ogni dispatch su GitHub.
+- `workflow_deployment` → letto da `master-setup.yml` prima di distribuire i workflow.
+- `clasp_deployment` → abilita il rilevamento `.clasp.json` e il deploy automatico su Apps Script.
+- `pr_review` → abilita il deployment del reviewer automatico (`jules_reviewer.yml` o `.coderabbit.yaml`).
+- `excluded_repos` → lista di repo saltati da `master-setup.yml` (il controller stesso va sempre escluso).
 
 ---
 
@@ -254,6 +288,31 @@ I prompt sono strutturati con ruoli (es. "Senior Software Engineer"), compiti at
 
 ---
 
+### 10. Review Automatica PR
+
+Ogni Pull Request creata da Jules viene analizzata automaticamente da un reviewer AI. Il sistema si adatta alla visibilità del repository:
+
+| Tipo di Repo | Reviewer | Deployment |
+| :--- | :--- | :--- |
+| **Pubblico** | [CodeRabbit](https://coderabbit.ai) (GitHub App gratuita) | `.coderabbit.yaml` nella root del repo |
+| **Privato** | Gemini 2.0 Flash via API | `jules_reviewer.yml` in `.github/workflows/` |
+
+#### Verdetti del Reviewer Gemini
+
+Il reviewer analizza il diff della PR e assegna uno dei tre verdetti:
+
+| Verdetto | Label | Azione |
+| :--- | :--- | :--- |
+| `SAFE` | 🟢 `jules-safe` | PR corretta, pronta per il merge manuale |
+| `RISKY` | 🟡 `jules-risky` | Richiede revisione umana prima del merge |
+| `BROKEN` | 🔴 `jules-broken` | PR chiusa automaticamente con commento di spiegazione |
+
+**Secret necessario nel controller**: `GEMINI_API_KEY` — ottenibile gratuitamente da [aistudio.google.com](https://aistudio.google.com).
+
+Il deployment è controllato dal flag `pr_review` in `jules_config.yml` ed è gestito automaticamente da `master-setup.yml` ad ogni esecuzione notturna.
+
+---
+
 ## ⚙️ Configurazione Iniziale
 
 ### Prerequisiti
@@ -271,8 +330,10 @@ I prompt sono strutturati con ruoli (es. "Senior Software Engineer"), compiti at
 
    | Secret | Descrizione |
    | :--- | :--- |
-   | `PAT_TOKEN` | Il tuo GitHub Personal Access Token |
+   | `PAT_TOKEN` | Il tuo GitHub Personal Access Token (permessi: Contents, Workflows, Secrets, Metadata, Administration) |
    | `JULES_API_KEY` | La tua chiave API di Google Jules |
+   | `GEMINI_API_KEY` | Chiave API Gemini (gratuita da aistudio.google.com) — necessaria solo se `pr_review: true` |
+   | `CLASPRC_JSON` | Contenuto di `~/.clasprc.json` — necessario solo se `clasp_deployment: true` |
 
 3. Lancia manualmente il workflow **"Jules Universal Setup (Secrets & Workflows)"** dalla tab Actions per configurare tutti i repository al primo avvio.
 
@@ -285,26 +346,32 @@ Una volta completato, i workflow notturni si occuperanno di mantenere tutto sinc
 ```text
 jules-controller/
 ├── .github/workflows/
-│   ├── controller.yml          # Dispatcher ciclico notturno
-│   ├── master-setup.yml        # Setup universale (secrets, workflow, label, branch protection)
-│   └── auto-config-sync.yml    # Auto-sync orari Rome→UTC
+│   ├── controller.yml              # Dispatcher ciclico notturno
+│   ├── master-setup.yml            # Setup universale (secrets, workflow, label, branch protection)
+│   ├── auto-config-sync.yml        # Auto-sync orari Rome→UTC
+│   └── clasp-deploy-calendar.yml   # CI deploy calendar-integration su Apps Script
 ├── calendar-integration/
 │   ├── src/
-│   │   └── index.ts            # Logica completa: API GitHub, Calendar, Trigger Management
-│   ├── dist/                   # Output compilato per Apps Script
+│   │   └── index.ts                # Logica completa: API GitHub, Calendar, Trigger Management
+│   ├── dist/                       # Output compilato per Apps Script (Code.js + appsscript.json)
 │   ├── scripts/
-│   │   └── build.js            # Build script (esbuild → Code.js)
-│   ├── package.json            # Dipendenze: esbuild, @types/google-apps-script
-│   └── .clasp.json             # Configurazione Clasp (Script ID)
+│   │   └── build.js                # Build script (esbuild IIFE + GAS function stubs)
+│   ├── appsscript.json             # Manifest Apps Script (timezone, V8 runtime)
+│   ├── tsconfig.json               # Config TypeScript (ES2022, strict)
+│   ├── package.json                # Dipendenze: esbuild, clasp, @types/google-apps-script
+│   └── .clasp.json                 # Configurazione Clasp (Script ID, rootDir: dist)
 ├── scripts/
-│   └── sync-schedules.py       # Convertitore Rome Time → UTC cron
+│   └── sync-schedules.py           # Convertitore Rome Time → UTC cron
 ├── templates/
-│   └── jules_agent.yml         # Template agent copiato in ogni repo target
-├── jules_config.yml            # Controllo centralizzato (Feature Switches & Orari)
-├── jules_targets.yml           # Definizione repo target e automazioni cicliche
-├── PROMPTS.md                  # Libreria di prompt ottimizzati per Jules
-├── .gitignore                  # Esclusioni (node_modules, dist, .clasp.json, ecc.)
-└── README.md                   # Questa documentazione
+│   ├── jules_agent.yml             # Template agent copiato in ogni repo target
+│   ├── jules_reviewer.yml          # Template reviewer Gemini Flash (repo privati)
+│   └── .coderabbit.yaml            # Config CodeRabbit (repo pubblici)
+├── jules_config.yml                # Controllo centralizzato (Feature flags, orari, excluded_repos)
+├── jules_targets.yml               # Definizione repo target e automazioni cicliche
+├── clasp_targets.yml               # Mapping repo → Script ID per deploy Clasp
+├── PROMPTS.md                      # Libreria di prompt ottimizzati per Jules
+├── .gitignore                      # Esclusioni (node_modules, dist, .env, ecc.)
+└── README.md                       # Questa documentazione
 ```
 
 ---
@@ -347,7 +414,9 @@ jules-controller/
    ```
 
    Questo comando:
-   - Compila `src/index.ts` → `dist/Code.js` tramite **esbuild** (banner + bundle).
+   - Compila `src/index.ts` → `dist/Code.js` tramite **esbuild** (formato IIFE).
+   - Appende automaticamente **stub top-level** per le funzioni GAS (`setupCalendarTrigger`, `onCalendarEvent`, ecc.) così appaiono nel dropdown dell'editor Apps Script.
+   - Copia `appsscript.json` in `dist/`.
    - Esegue `clasp push` per caricare il codice su Apps Script.
 
 4. **Configura Apps Script nel browser:**
@@ -372,6 +441,8 @@ jules-controller/
 | `Could not apply branch protection` | PAT senza permessi admin | Aggiungi il permesso `Administration: Read/Write` al PAT |
 | `Could not fetch global config` | Repo controller privato / PAT scaduto | Verifica che il PAT abbia accesso al repo `jules-controller` |
 | `Calendar: Lock timeout` | Troppe modifiche rapide al calendario | Attendi 30 secondi e riprova. Il LockService si sbloccherà automaticamente |
+| `Funzioni non visibili in Apps Script` | Build IIFE senza stub top-level | Assicurati di usare `pnpm run build` dalla versione aggiornata di `scripts/build.js` che genera gli stub |
+| `Trigger cap reached` | Troppe serie ricorrenti attive (>17 trigger) | Riduci il numero di serie ricorrenti o aumenta `MAX_EVENT_TRIGGERS` in `src/index.ts` |
 
 ### Sicurezza (Best Practices)
 
