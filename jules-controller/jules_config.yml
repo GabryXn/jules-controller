@@ -23,6 +23,11 @@ features:
   # Review automatica PR: CodeRabbit (repo pubblici) + Gemini Flash (repo privati)
   pr_review: true
 
+  # Orchestratore intelligente: analizza i repo e genera task ottimizzati per Jules
+  # tramite AI (GitHub Models — zero nuovi segreti, usa GITHUB_TOKEN automatico).
+  # Vedi: .github/workflows/jules-orchestrator.yml
+  orchestrator_automation: true 
+
 # 2. Scheduling (Orari in formato HH:MM - Fuso Orario di ROMA)
 # I cambiamenti qui aggiorneranno automaticamente i workflow di GitHub.
 schedules:

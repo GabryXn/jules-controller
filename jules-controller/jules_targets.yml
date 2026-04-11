@@ -30,14 +30,43 @@ targets:
       - name: "vulnerability-scan"
         schedule: "weekly"
         prompt: |
-          Esegui un'analisi completa di sicurezza e vulnerabilità su questo progetto:
-          1. Controlla tutte le dipendenze per vulnerabilità note (CVE).
-          2. Cerca hardcoded secrets, API keys o password nel codice.
-          3. Verifica che gli input siano validati e sanitizzati correttamente.
-          4. Controlla eventuali problemi di injection (SQL, command, XSS).
-          5. Aggiorna le dipendenze vulnerabili alla versione sicura più recente.
-          6. Esegui i test per verificare che tutto funzioni dopo le modifiche.
-          7. Crea una PR solo se trovi e correggi vulnerabilità reali.
+          Perform a targeted security audit on this repository.
+
+          STEP 1 — ORIENTATION (mandatory before any changes):
+          Read CLAUDE.md, AGENTS.md, or README.md. Identify the tech stack, the package
+          manager in use (check for pnpm-lock.yaml, uv.lock, poetry.lock, etc.), and the
+          command to run the existing test suite.
+
+          STEP 2 — AUDIT (work through each item in order):
+
+          a) DEPENDENCY CVEs
+             Scan all dependency manifests (package.json, pyproject.toml, go.mod, Gemfile…).
+             For each package with a known CVE, upgrade it to the minimum patched version.
+             Upgrade ONE dependency at a time. Run the existing tests after each upgrade.
+             If tests fail after an upgrade, revert that specific dependency and document it.
+
+          b) HARDCODED SECRETS
+             Search source files for hardcoded API keys, tokens, passwords, or credentials
+             (patterns: api_key, secret, password, token, private_key, bearer, auth_token).
+             Do NOT delete them — add a comment: # SECURITY: hardcoded credential — move to env var
+             Never log or print the found values.
+
+          c) INPUT VALIDATION
+             Check that HTTP parameters, user inputs, and file paths are validated before
+             reaching database queries, shell commands, or file operations.
+             Patch unvalidated entry points with proper validation.
+
+          d) INJECTION VECTORS
+             Look for SQL injection, shell command injection, path traversal, and XSS.
+             Fix confirmed vulnerabilities with the minimal necessary change only.
+
+          STEP 3 — OUTPUT:
+          - Create a PR ONLY if at least one real vulnerability was found and fixed or flagged.
+          - PR title: "security: weekly audit — [N] issues found"
+          - PR body must list each finding: type, file, line number, and action taken.
+          - NEVER modify business logic as a side effect of security fixes.
+          - NEVER merge the PR. Human review of all security changes is mandatory.
+          - If no vulnerabilities are found, do NOT create a PR.
 
   # ── Bot Orchestrator Hub ────────────────
   - repo: "GabryXn/bot-orchestrator-hub"
@@ -45,14 +74,43 @@ targets:
       - name: "vulnerability-scan"
         schedule: "weekly"
         prompt: |
-          Esegui un'analisi completa di sicurezza e vulnerabilità su questo progetto:
-          1. Controlla tutte le dipendenze per vulnerabilità note (CVE).
-          2. Cerca hardcoded secrets, API keys o password nel codice.
-          3. Verifica che gli input siano validati e sanitizzati correttamente.
-          4. Controlla eventuali problemi di injection (SQL, command, XSS).
-          5. Aggiorna le dipendenze vulnerabili alla versione sicura più recente.
-          6. Esegui i test per verificare che tutto funzioni dopo le modifiche.
-          7. Crea una PR solo se trovi e correggi vulnerabilità reali.
+          Perform a targeted security audit on this repository.
+
+          STEP 1 — ORIENTATION (mandatory before any changes):
+          Read CLAUDE.md, AGENTS.md, or README.md. Identify the tech stack, the package
+          manager in use (check for pnpm-lock.yaml, uv.lock, poetry.lock, etc.), and the
+          command to run the existing test suite.
+
+          STEP 2 — AUDIT (work through each item in order):
+
+          a) DEPENDENCY CVEs
+             Scan all dependency manifests (package.json, pyproject.toml, go.mod, Gemfile…).
+             For each package with a known CVE, upgrade it to the minimum patched version.
+             Upgrade ONE dependency at a time. Run the existing tests after each upgrade.
+             If tests fail after an upgrade, revert that specific dependency and document it.
+
+          b) HARDCODED SECRETS
+             Search source files for hardcoded API keys, tokens, passwords, or credentials
+             (patterns: api_key, secret, password, token, private_key, bearer, auth_token).
+             Do NOT delete them — add a comment: # SECURITY: hardcoded credential — move to env var
+             Never log or print the found values.
+
+          c) INPUT VALIDATION
+             Check that HTTP parameters, user inputs, and file paths are validated before
+             reaching database queries, shell commands, or file operations.
+             Patch unvalidated entry points with proper validation.
+
+          d) INJECTION VECTORS
+             Look for SQL injection, shell command injection, path traversal, and XSS.
+             Fix confirmed vulnerabilities with the minimal necessary change only.
+
+          STEP 3 — OUTPUT:
+          - Create a PR ONLY if at least one real vulnerability was found and fixed or flagged.
+          - PR title: "security: weekly audit — [N] issues found"
+          - PR body must list each finding: type, file, line number, and action taken.
+          - NEVER modify business logic as a side effect of security fixes.
+          - NEVER merge the PR. Human review of all security changes is mandatory.
+          - If no vulnerabilities are found, do NOT create a PR.
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -109,31 +167,82 @@ targets:
 # └─────────────────────────────────────────────────────────────┘
 #
 #      - name: "dependency-update"
+#        schedule: "weekly"
 #        prompt: |
-#          Controlla se ci sono dipendenze obsolete.
-#          Aggiornale alla versione stabile più recente.
-#          Esegui i test e crea una PR solo se passano tutti.
+#          Update outdated dependencies in this repository.
+#
+#          STEP 1 — Read CLAUDE.md, AGENTS.md, or README.md to identify the tech stack,
+#          package manager (pnpm/npm/yarn/uv/poetry), and test command.
+#
+#          STEP 2 — List all outdated packages. Update them ONE at a time, starting with
+#          patch versions, then minor, then major. After each update run the test suite.
+#          If a test fails after an update, revert that specific package and document why.
+#          Never update multiple packages simultaneously.
+#
+#          STEP 3 — Create a PR only if at least one package was successfully updated.
+#          PR title: "chore: update [N] dependencies"
+#          PR body: table with package name, old version, new version, and test result.
+#          NEVER merge the PR.
 #
 #      - name: "test-coverage"
+#        schedule: "weekly"
 #        prompt: |
-#          Analizza la copertura dei test.
-#          Scrivi i test mancanti per le funzionalità critiche.
-#          Punta ad avere almeno l'80% di coverage.
+#          Improve test coverage for the most critical untested code paths.
 #
-#      - name: "performance-refactor"
+#          STEP 1 — Read CLAUDE.md, AGENTS.md, or README.md to understand the test framework
+#          in use (Jest, Vitest, pytest, etc.) and how to run tests.
+#
+#          STEP 2 — Run the existing test suite. Identify functions or modules with zero or
+#          minimal coverage. Prioritize: public API functions, data transformations, error
+#          handling paths, and business logic.
+#
+#          STEP 3 — Write tests for the 3-5 highest-risk untested paths. Follow the exact
+#          same test style and patterns already used in the codebase.
+#          Do NOT modify any source files — only add test files.
+#
+#          STEP 4 — Run the full test suite again to confirm all tests pass.
+#          Create a PR with title: "test: add coverage for [module/feature]"
+#          NEVER merge the PR.
+#
+#      - name: "dead-code-cleanup"
+#        schedule: "monthly"
 #        prompt: |
-#          Cerca codice inefficiente e ottimizzalo.
-#          Cerca N+1 queries, loop inutili, re-render non necessari.
-#          Crea una PR con le ottimizzazioni e i benchmark prima/dopo.
+#          Remove dead code and unused imports from this repository.
+#
+#          STEP 1 — Read CLAUDE.md, AGENTS.md, or README.md to understand the project
+#          structure and conventions.
+#
+#          STEP 2 — Find and remove:
+#          - Unused imports and require() statements
+#          - Variables declared but never referenced
+#          - Commented-out code blocks that are clearly obsolete
+#            (do NOT remove explanatory comments, TODOs, or FIXMEs)
+#          If an exported function has no known callers in the repo, add a comment
+#          # UNUSED: verify before deleting — do NOT delete it directly.
+#
+#          STEP 3 — Verify the existing test suite still passes after removals.
+#
+#          STEP 4 — Create a PR with title: "chore: remove dead code and unused imports"
+#          List in the PR body: each file modified, what was removed, and how many
+#          imports/variables were eliminated.
+#          NEVER modify business logic. NEVER merge the PR.
+#          If nothing was found, do NOT create a PR.
 #
 #      - name: "docs-update"
+#        schedule: "monthly"
 #        prompt: |
-#          Analizza il codice e aggiorna la documentazione.
-#          Assicurati che README, commenti e JSDoc siano aggiornati.
-#          Documenta funzioni pubbliche non documentate.
+#          Update and improve the documentation for this repository.
 #
-#      - name: "code-cleanup"
-#        prompt: |
-#          Rimuovi codice morto, import inutilizzati e TODO scaduti.
-#          Applica le best practice di linting e formattazione.
-#          Non cambiare la logica, solo pulizia.
+#          STEP 1 — Read the current README.md, CLAUDE.md, and any other docs files.
+#          Read the source code to understand what has changed or is undocumented.
+#
+#          STEP 2 — Update README.md if:
+#          - Installation instructions are missing or outdated
+#          - New features or modules are not mentioned
+#          - Configuration options are not documented
+#          Add JSDoc/docstrings to public functions that have none.
+#          Ensure all file headers describe the file's purpose.
+#
+#          STEP 3 — Do NOT change any source code logic. Documentation changes only.
+#          Create a PR with title: "docs: update README and inline documentation"
+#          NEVER merge the PR.

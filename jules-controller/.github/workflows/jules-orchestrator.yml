@@ -1,0 +1,415 @@
+# ═══════════════════════════════════════════════════════════════
+# Jules Intelligent Orchestrator
+# ═══════════════════════════════════════════════════════════════
+# Analizza ogni repository target e genera automaticamente un task
+# specifico e ottimizzato per Jules tramite un modello AI.
+#
+# COME FUNZIONA:
+#   1. Per ogni repo in jules_targets.yml:
+#      a. Raccoglie contesto reale: stack, README, commits, struttura
+#      b. Verifica che non ci siano già PR Jules in attesa di review
+#      c. Chiama l'AI per generare 1 task atomico e ottimizzato
+#      d. Dispatcha jules_agent.yml con il task generato
+#
+# AI PROVIDER (auto-detection, nessun setup richiesto):
+#   - Primary:  GitHub Models (GITHUB_TOKEN con models:read — zero nuovi segreti)
+#   - Fallback: Groq API (aggiunge GROQ_API_KEY secret per usarlo)
+#
+# ATTIVAZIONE:
+#   Imposta 'orchestrator_automation: true' in jules_config.yml
+# ═══════════════════════════════════════════════════════════════
+
+name: Jules Intelligent Orchestrator
+
+on:
+  schedule:
+    # Domenica 22:00 UTC — prima del ciclo settimanale del controller (lunedì)
+    - cron: '0 22 * * 0'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Genera task senza dispatchare Jules (solo log)'
+        required: false
+        default: 'false'
+        type: boolean
+      target_repo:
+        description: 'Analizza solo questo repo (es. owner/repo). Vuoto = tutti i target.'
+        required: false
+        default: ''
+        type: string
+
+# Permesso necessario per GitHub Models API (zero costo, usa GITHUB_TOKEN automatico)
+permissions:
+  contents: read
+  models: read
+
+jobs:
+  orchestrate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🔐 Validate tokens
+        id: validate
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          echo "🔍 Checking PAT_TOKEN..."
+          if ! gh api user --silent 2>/dev/null; then
+            echo "❌ PAT_TOKEN is invalid or expired."
+            exit 1
+          fi
+          echo "✅ PAT_TOKEN OK"
+
+          # Auto-detect AI provider
+          if [ -n "${{ secrets.GROQ_API_KEY }}" ]; then
+            echo "🤖 AI provider: Groq (GROQ_API_KEY found)"
+            echo "ai_provider=groq" >> $GITHUB_OUTPUT
+          else
+            echo "🤖 AI provider: GitHub Models (GITHUB_TOKEN)"
+            echo "ai_provider=github_models" >> $GITHUB_OUTPUT
+          fi
+
+      - name: ⚙️ Check if orchestrator is enabled
+        id: check_config
+        run: |
+          ENABLED=$(yq eval '.features.orchestrator_automation // false' jules_config.yml)
+          echo "enabled=$ENABLED" >> $GITHUB_OUTPUT
+          if [ "$ENABLED" != "true" ]; then
+            echo "⚠️  orchestrator_automation is disabled in jules_config.yml — set it to true to activate."
+          fi
+
+      - name: 🧠 Analyze repos and dispatch Jules tasks
+        if: steps.check_config.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+          # GitHub Models usa il GITHUB_TOKEN automatico del workflow
+          GH_MODELS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          AI_PROVIDER: ${{ steps.validate.outputs.ai_provider }}
+        run: |
+          set -euo pipefail
+
+          echo "## 🧠 Jules Intelligent Orchestrator" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Repository | Status | Category | Task |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|---|---|" >> $GITHUB_STEP_SUMMARY
+
+          FILTER_REPO="${{ inputs.target_repo }}"
+          DISPATCHED=0
+          SKIPPED=0
+          ERRORS=0
+
+          # ─────────────────────────────────────────────────────────────────────
+          # Helper: call AI API and return raw JSON response
+          # Usage: call_ai "$payload"
+          # ─────────────────────────────────────────────────────────────────────
+          call_ai() {
+            local payload="$1"
+            local response=""
+
+            if [ "$AI_PROVIDER" = "groq" ]; then
+              response=$(curl -sf --connect-timeout 20 --max-time 60 \
+                "https://api.groq.com/openai/v1/chat/completions" \
+                -H "Authorization: Bearer $GROQ_API_KEY" \
+                -H "Content-Type: application/json" \
+                -d "$payload" 2>/dev/null || echo "")
+            else
+              # GitHub Models (primary — zero cost, uses GITHUB_TOKEN)
+              response=$(curl -sf --connect-timeout 20 --max-time 60 \
+                "https://models.inference.ai.azure.com/chat/completions" \
+                -H "Authorization: Bearer $GH_MODELS_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d "$payload" 2>/dev/null || echo "")
+            fi
+
+            echo "$response"
+          }
+
+          # ─────────────────────────────────────────────────────────────────────
+          # Process each target repo
+          # ─────────────────────────────────────────────────────────────────────
+          while IFS= read -r target; do
+            REPO=$(echo "$target" | jq -r '.repo')
+
+            # Apply manual filter from workflow_dispatch
+            if [ -n "$FILTER_REPO" ] && [ "$REPO" != "$FILTER_REPO" ]; then
+              continue
+            fi
+
+            echo ""
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "🔍 Analyzing: $REPO"
+
+            # ── Guard: skip if Jules PRs are already open ──────────────────────
+            # Non accumulate lavoro se Jules ha già PR in attesa di review umana
+            OPEN_JULES_PRS=$(gh pr list -R "$REPO" --state open \
+              --json labels \
+              --jq '[.[] | select(.labels[].name | test("jules-safe|jules-risky|jules-broken"))] | length' \
+              2>/dev/null || echo "0")
+
+            if [ "$OPEN_JULES_PRS" -gt 0 ]; then
+              echo "  ⏸️  $OPEN_JULES_PRS open Jules PR(s) pending review — skipping"
+              echo "| \`$REPO\` | ⏸️ Skipped | — | Jules PR pending review |" >> $GITHUB_STEP_SUMMARY
+              SKIPPED=$((SKIPPED + 1))
+              continue
+            fi
+
+            # ── Gather repo context ────────────────────────────────────────────
+
+            # Tech stack detection from manifest files
+            STACK_INFO="Unknown"
+            PKG_DETAILS=""
+
+            if PKG_CONTENT=$(gh api "repos/$REPO/contents/package.json" \
+                -q '.content' 2>/dev/null | base64 -d 2>/dev/null); then
+              STACK_INFO="Node.js / JavaScript / TypeScript"
+              PKG_DETAILS=$(echo "$PKG_CONTENT" | \
+                jq -c '{name,description,scripts,dependencies,devDependencies}' 2>/dev/null | \
+                head -c 1400 || echo "")
+              # Detect specific framework
+              if echo "$PKG_DETAILS" | grep -q '"react-native"\|"expo"'; then
+                STACK_INFO="React Native / Expo (Mobile)"
+              elif echo "$PKG_DETAILS" | grep -q '"next"\|"@next'"; then
+                STACK_INFO="Next.js"
+              elif echo "$PKG_DETAILS" | grep -q '"react"'; then
+                STACK_INFO="React"
+              elif echo "$PKG_DETAILS" | grep -q '"fastapi"\|"flask"\|"django"'; then
+                STACK_INFO="Python Web"
+              fi
+            elif PY_CONTENT=$(gh api "repos/$REPO/contents/pyproject.toml" \
+                -q '.content' 2>/dev/null | base64 -d 2>/dev/null); then
+              STACK_INFO="Python (pyproject.toml / uv / poetry)"
+              PKG_DETAILS=$(echo "$PY_CONTENT" | head -c 900 || echo "")
+            elif REQ_CONTENT=$(gh api "repos/$REPO/contents/requirements.txt" \
+                -q '.content' 2>/dev/null | base64 -d 2>/dev/null); then
+              STACK_INFO="Python (requirements.txt)"
+              PKG_DETAILS=$(echo "$REQ_CONTENT" | head -c 700 || echo "")
+            elif gh api "repos/$REPO/contents/go.mod" --silent 2>/dev/null; then
+              STACK_INFO="Go"
+              PKG_DETAILS=$(gh api "repos/$REPO/contents/go.mod" \
+                -q '.content' 2>/dev/null | base64 -d 2>/dev/null | head -c 700 || echo "")
+            elif gh api "repos/$REPO/contents/Cargo.toml" --silent 2>/dev/null; then
+              STACK_INFO="Rust"
+            fi
+
+            # README (first 1200 chars — most important context signal)
+            README=$(gh api "repos/$REPO/contents/README.md" \
+              -q '.content' 2>/dev/null | base64 -d 2>/dev/null | head -c 1200 \
+              || echo "No README found")
+
+            # Root file listing
+            FILE_LIST=$(gh api "repos/$REPO/contents/" \
+              --jq '[.[].name] | join(", ")' 2>/dev/null | head -c 500 \
+              || echo "Could not fetch")
+
+            # Source directory listing — reveals what modules/features exist
+            # Try common source dir names in order
+            SRC_LISTING=""
+            for SRC_DIR in src app lib source packages; do
+              LISTING=$(gh api "repos/$REPO/contents/$SRC_DIR" \
+                --jq '[.[] | .name + " (" + .type + ")"] | join(", ")' \
+                2>/dev/null | head -c 500 || echo "")
+              if [ -n "$LISTING" ]; then
+                SRC_LISTING="$SRC_DIR/: $LISTING"
+                break
+              fi
+            done
+
+            # Sample one key source file to understand actual code patterns
+            # Prefer: index.ts, main.ts, main.py, app.py, index.js — first one found
+            CODE_SAMPLE=""
+            for KEY_FILE in src/index.ts src/main.ts src/app.ts app/index.ts \
+                            src/index.js src/main.js index.ts main.ts \
+                            main.py app.py src/main.py src/app.py; do
+              SAMPLE=$(gh api "repos/$REPO/contents/$KEY_FILE" \
+                -q '.content' 2>/dev/null | base64 -d 2>/dev/null | head -c 1500 || echo "")
+              if [ -n "$SAMPLE" ]; then
+                CODE_SAMPLE=$(printf 'File: %s\n%s' "$KEY_FILE" "$SAMPLE")
+                break
+              fi
+            done
+
+            # Last 10 commit messages (understand what has been done recently)
+            RECENT_COMMITS=$(gh api "repos/$REPO/commits?per_page=10" \
+              --jq '[.[] | .commit.message | split("\n")[0]] | join(" | ")' \
+              2>/dev/null | head -c 700 \
+              || echo "No commit history available")
+
+            # Open issues with titles (understand known problems / requested features)
+            OPEN_ISSUE_TITLES=$(gh api "repos/$REPO/issues?state=open&per_page=5" \
+              --jq '[.[] | "#" + (.number|tostring) + " " + .title] | join(" | ")' \
+              2>/dev/null | head -c 400 \
+              || echo "None")
+
+            # Has tests?
+            HAS_TESTS="not detected"
+            if gh api "repos/$REPO/contents/" --jq '.[].name' 2>/dev/null \
+                | grep -qiE "^(test|tests|spec|__tests__|test_)"; then
+              HAS_TESTS="yes (test directory found in root)"
+            elif echo "$PKG_DETAILS" | jq -r '.scripts.test // ""' 2>/dev/null \
+                | grep -qvE "^(echo|:|false|'')?$"; then
+              HAS_TESTS="yes (test script in package.json)"
+            fi
+
+            # Repo visibility and open issues count
+            OPEN_ISSUES=$(gh api "repos/$REPO" -q '.open_issues_count' 2>/dev/null || echo "0")
+            VISIBILITY=$(gh api "repos/$REPO" -q '.visibility' 2>/dev/null || echo "unknown")
+
+            echo "  📊 Stack: $STACK_INFO | Tests: $HAS_TESTS | Issues: $OPEN_ISSUES"
+            [ -n "$SRC_LISTING" ] && echo "  📁 Source dir: $SRC_LISTING"
+            [ -n "$CODE_SAMPLE" ] && echo "  📄 Code sample: fetched"
+
+            # ── Build analysis prompt ──────────────────────────────────────────
+            # Note: all heredoc lines are indented to match YAML block indent.
+            # YAML strips that indent; bash sees content at column 0 (valid heredoc).
+
+            SYSTEM_MSG=$(cat << 'EOF_SYSTEM'
+            You are a senior software engineering analyst and technical lead. Your job is to analyze a GitHub repository and generate one high-value, well-scoped task for Jules — an autonomous AI coding agent powered by Gemini 2.5 Pro.
+            WHAT YOU KNOW ABOUT JULES:
+            - Jules reads the entire repository before acting, so it understands the full codebase.
+            - Jules works best on ONE clearly defined, atomic task per run.
+            - Jules excels at: implementing features, fixing bugs, writing tests, updating docs, removing dead code, adding error handling, and security hardening.
+            - Jules struggles with: vague tasks, multi-objective prompts, large architectural redesigns, tasks requiring business context not inferable from code.
+            - The task you generate is injected as the TASK section in Jules prompt. Jules automatically reads CLAUDE.md/README, detects the package manager, runs tests, and creates a PR. Do NOT repeat those instructions in the task.
+            - CRITICAL: The task must be specific enough for Jules to execute with zero clarification. Name specific files, modules, or functions whenever you can infer them from the provided context.
+            Return ONLY a valid JSON object with no extra text.
+            EOF_SYSTEM
+            )
+
+            USER_MSG=$(cat << EOF_USER
+            Analyze this repository and generate exactly ONE task for Jules to execute this week.
+            REPO: $REPO
+            VISIBILITY: $VISIBILITY
+            TECH STACK: $STACK_INFO
+            OPEN ISSUES: $OPEN_ISSUES
+            HAS TESTS: $HAS_TESTS
+            ROOT FILES: $FILE_LIST
+            SOURCE DIR: ${SRC_LISTING:-not detected}
+            RECENT COMMITS (last 10): $RECENT_COMMITS
+            OPEN ISSUE TITLES: $OPEN_ISSUE_TITLES
+            MANIFEST/DEPS: $PKG_DETAILS
+            README: $README
+            KEY SOURCE FILE: ${CODE_SAMPLE:-not available}
+            ---
+            TASK PRIORITY ORDER (choose the single most valuable):
+            1. FEATURE: one small self-contained feature mentioned in README/TODO, a natural next step from the code structure, or a clearly missing quality-of-life improvement (error messages, loading states, empty states, input validation feedback, structured logging). Only suggest if Jules can implement it fully without architectural decisions.
+            2. BUGFIX: one concrete identifiable bug (unhandled promise rejection, null dereference on external data, missing error handling on critical path).
+            3. TESTS: tests for one untested critical module (only if tests already exist in repo, follow existing patterns).
+            4. SECURITY: one concrete gap (missing input sanitization, hardcoded credential, unvalidated file path).
+            5. CLEANUP: dead code / unused imports (last resort only).
+            6. DEPENDENCY: one outdated/vulnerable package (one at a time).
+            ---
+            Return ONLY this JSON object (no markdown, no text outside the JSON):
+            {"task": "Self-contained 3-6 sentence task Jules can execute with zero clarification. Start with an action verb. Name specific files, functions, or modules inferred from the context. Describe the expected outcome. Do NOT mention PRs, tests, or reading docs.", "category": "feature|bugfix|tests|security|cleanup|dependency", "rationale": "One sentence: why this is the highest-value task for this repo right now.", "complexity": "low|medium|high"}
+            EOF_USER
+            )
+
+            # Build JSON payload (jq handles escaping)
+            MODEL="meta-llama-3.1-70b-instruct"
+            if [ "$AI_PROVIDER" = "groq" ]; then
+              MODEL="llama-3.3-70b-versatile"
+            fi
+
+            PAYLOAD=$(jq -n \
+              --arg sys "$SYSTEM_MSG" \
+              --arg usr "$USER_MSG" \
+              --arg model "$MODEL" \
+              '{
+                "model": $model,
+                "messages": [
+                  {"role": "system", "content": $sys},
+                  {"role": "user", "content": $usr}
+                ],
+                "temperature": 0.4,
+                "max_tokens": 800,
+                "response_format": {"type": "json_object"}
+              }')
+
+            # ── Call AI ────────────────────────────────────────────────────────
+            RESPONSE=$(call_ai "$PAYLOAD")
+
+            if [ -z "$RESPONSE" ]; then
+              echo "  ⚠️  API returned empty response for $REPO — skipping"
+              echo "| \`$REPO\` | ⚠️ Error | — | API returned empty response |" >> $GITHUB_STEP_SUMMARY
+              ERRORS=$((ERRORS + 1))
+              sleep 3
+              continue
+            fi
+
+            # Handle rate limit errors with one retry after 10s
+            HTTP_ERROR=$(echo "$RESPONSE" | jq -r '.error.code // empty' 2>/dev/null)
+            if [ "$HTTP_ERROR" = "rate_limit_exceeded" ] || [ "$HTTP_ERROR" = "429" ]; then
+              echo "  ⏳ Rate limit hit — waiting 10s and retrying..."
+              sleep 10
+              RESPONSE=$(call_ai "$PAYLOAD")
+            fi
+
+            GENERATED=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty' 2>/dev/null)
+
+            if [ -z "$GENERATED" ]; then
+              ERR=$(echo "$RESPONSE" | jq -r '.error.message // "Unknown error"' 2>/dev/null)
+              echo "  ⚠️  No task generated — $ERR"
+              echo "| \`$REPO\` | ⚠️ Error | — | $ERR |" >> $GITHUB_STEP_SUMMARY
+              ERRORS=$((ERRORS + 1))
+              sleep 3
+              continue
+            fi
+
+            TASK_TEXT=$(echo "$GENERATED" | jq -r '.task // empty' 2>/dev/null)
+            TASK_CATEGORY=$(echo "$GENERATED" | jq -r '.category // "general"' 2>/dev/null)
+            TASK_RATIONALE=$(echo "$GENERATED" | jq -r '.rationale // ""' 2>/dev/null)
+            TASK_COMPLEXITY=$(echo "$GENERATED" | jq -r '.complexity // "medium"' 2>/dev/null)
+
+            if [ -z "$TASK_TEXT" ]; then
+              echo "  ⚠️  Could not parse JSON task. Raw: $(echo "$GENERATED" | head -c 200)"
+              echo "| \`$REPO\` | ⚠️ Parse error | — | — | Could not parse AI response |" >> $GITHUB_STEP_SUMMARY
+              ERRORS=$((ERRORS + 1))
+              sleep 3
+              continue
+            fi
+
+            echo "  ✅ [$TASK_CATEGORY / $TASK_COMPLEXITY] $TASK_TEXT"
+            echo "  💡 Why: $TASK_RATIONALE"
+
+            # ── Step Summary (rich format, not table — task text is too long for table) ───
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 📦 \`$REPO\`" >> $GITHUB_STEP_SUMMARY
+            echo "**Category:** \`$TASK_CATEGORY\` · **Complexity:** \`$TASK_COMPLEXITY\`  " >> $GITHUB_STEP_SUMMARY
+            echo "**Why now:** $TASK_RATIONALE  " >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "> $TASK_TEXT" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            # ── Dispatch Jules ─────────────────────────────────────────────────
+            if [ "${{ inputs.dry_run }}" == "true" ]; then
+              echo "  [DRY RUN] Would dispatch Jules on $REPO with the above task"
+            else
+              DISPATCH_OUT=$(gh workflow run jules_agent.yml -R "$REPO" -f prompt="$TASK_TEXT" 2>&1)
+              if [ $? -eq 0 ]; then
+                echo "  🚀 Jules dispatched on $REPO"
+                DISPATCHED=$((DISPATCHED + 1))
+              else
+                echo "  🚨 Dispatch failed: $DISPATCH_OUT"
+                echo "**⚠️ Dispatch failed:** $DISPATCH_OUT" >> $GITHUB_STEP_SUMMARY
+                ERRORS=$((ERRORS + 1))
+              fi
+            fi
+
+            # Avoid GitHub API rate limits between repos
+            sleep 5
+
+          done < <(yq -o=json jules_targets.yml | jq -c '.targets[]')
+
+          # ── Final summary ──────────────────────────────────────────────────────
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🏁 Orchestration complete."
+          echo "   Dispatched: $DISPATCHED | Skipped: $SKIPPED | Errors: $ERRORS"
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Results:** ✅ $DISPATCHED dispatched · ⏸️ $SKIPPED skipped · ⚠️ $ERRORS errors" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "*AI provider: $AI_PROVIDER · Completed at $(date -u '+%Y-%m-%d %H:%M UTC')*" >> $GITHUB_STEP_SUMMARY

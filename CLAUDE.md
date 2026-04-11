@@ -86,23 +86,42 @@ Funzionalità principali:
 - Branch protection attiva su tutti i repo gestiti
 - Validazione token prima di ogni operazione
 
+### PR Review System
+
+Il sistema di review automatica delle PR si adatta alla visibilità del repository:
+
+- **Repo pubblici** → CodeRabbit (GitHub App gratuita, `.coderabbit.yaml` deployato automaticamente da `master-setup.yml`)
+- **Repo privati** → Gemini 2.0 Flash via API gratuita (`jules_reviewer.yml` deployato automaticamente)
+
+`master-setup.yml` gestisce automaticamente la migrazione: se un repo cambia visibilità, il file non pertinente viene rimosso e quello corretto viene aggiunto al ciclo successivo.
+
+### GitGuardian (Secret Scanning)
+
+`templates/gitguardian.yml` viene deployato su tutti i repo tramite `master-setup.yml` se il secret `GITGUARDIAN_API_KEY` è presente nel controller. Scansiona ogni push e PR per credenziali e secret hardcoded usando `ggshield`.
+
+Per attivarlo: crea un account su gitguardian.com (gratuito), genera un API key e aggiungila come secret `GITGUARDIAN_API_KEY` nel repo `jules-controller`.
+
 ## Workflow GitHub Actions
 
 | Workflow | Trigger | Scopo |
 |---|---|---|
 | `master-setup.yml` | Cron UTC 02:00 | Setup universale: secrets, template, labels, branch protection, reviewer deployment |
 | `controller.yml` | Cron UTC 03:00 | Dispatcher principale: legge targets e attiva Jules |
+| `jules-orchestrator.yml` | Cron domenica 22:00 UTC | Orchestratore AI: analizza repo e genera task ottimizzati per Jules (GitHub Models) |
 | `auto-config-sync.yml` | Push su `jules_config.yml` / Cron UTC 00:00 | Sincronizza Rome Time → UTC nei workflow |
 | `clasp-deploy-calendar.yml` | Push su `calendar-integration/**` | Build TypeScript + clasp push su Apps Script |
 | `jules_agent.yml` (template) | `workflow_dispatch` / issue label | Eseguito nei repo target, invoca Jules AI |
 | `jules_reviewer.yml` (template) | `pull_request` (opened/sync) | Review automatica PR con Gemini Flash (repo privati) |
+| `gitguardian.yml` (template) | Push / `pull_request` | Secret scanning con ggshield (tutti i repo, richiede `GITGUARDIAN_API_KEY`) |
 
 ### PR Review System
 
 Il sistema di review automatica delle PR si adatta alla visibilità del repository:
 
-- **Repo pubblici** → CodeRabbit (GitHub App gratuita, `.coderabbit.yaml` deployato automaticamente)
+- **Repo pubblici** → CodeRabbit (GitHub App gratuita, `.coderabbit.yaml` deployato automaticamente da `master-setup.yml`)
 - **Repo privati** → Gemini 2.0 Flash via API gratuita (`jules_reviewer.yml` deployato automaticamente)
+
+`master-setup.yml` gestisce automaticamente la migrazione: se un repo cambia visibilità, il file non pertinente viene rimosso e quello corretto aggiunto al ciclo successivo.
 
 Il reviewer Gemini analizza il diff e assegna un verdict:
 - `SAFE` (label verde `jules-safe`) — PR corretta, mergiabile
@@ -110,6 +129,12 @@ Il reviewer Gemini analizza il diff e assegna un verdict:
 - `BROKEN` (label rossa `jules-broken`) — PR auto-chiusa con commento
 
 Secrets necessari nel controller: `GEMINI_API_KEY` (gratuita da aistudio.google.com)
+
+### GitGuardian (Secret Scanning)
+
+`templates/gitguardian.yml` viene deployato su tutti i repo se `GITGUARDIAN_API_KEY` è presente nel controller. Scansiona ogni push e PR per credenziali hardcoded.
+
+Secrets necessari nel controller: `GITGUARDIAN_API_KEY` (gratuita da gitguardian.com)
 
 ## Build System (Calendar Integration)
 

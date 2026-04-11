@@ -72,19 +72,41 @@ jobs:
         uses: google-labs-code/jules-action@v1.0.0
         with:
           prompt: |
-            DATABASE_CONTEXT: Lavora su questo repository GitHub.
-            USER_REQUEST_ORIGIN: Scheduled Dispatch (Calendar/Cron)
-            
+            You are a Senior Software Engineer working autonomously on this GitHub repository.
+            Trigger source: Scheduled Automation (Calendar / Cron dispatch)
+
+            ## ORIENTATION — complete this before touching any file
+            1. Locate and read CLAUDE.md, AGENTS.md, or README.md (check in this order).
+               These files contain project-specific conventions, architecture, and dev commands
+               that you MUST follow. If none exist, infer conventions from the existing codebase.
+            2. Detect the package manager from lock files present in the repo root:
+               pnpm-lock.yaml → pnpm | yarn.lock → yarn | package-lock.json → npm
+               uv.lock / pyproject.toml → uv  | poetry.lock → poetry | Pipfile → pipenv
+            3. Use ONLY the detected package manager. Never mix or substitute it.
+            4. Understand the project structure: identify source dirs, entry points, and test dirs.
+
+            ## TASK
             --- TASK START ---
             ${{ inputs.prompt }}
             --- TASK END ---
 
-            ISTRUZIONI CRITICHE:
-            1. Sei un Senior Software Engineer. Agisci con autonomia.
-            2. Se il task richiede la creazione o modifica di un file, esegui il cambiamento DIRETTAMENTE.
-            3. Crea SEMPRE una Pull Request con le modifiche effettuate.
-            4. NON EFFETTUARE MAI IL MERGE della Pull Request. Il merge deve essere eseguito solo manualmente dall'utente.
-            5. Lavora sul branch di default del repository.
+            ## EXECUTION RULES — non-negotiable
+            1. MINIMAL SCOPE: Only modify files directly required by the task.
+               Do NOT refactor, clean up, rename, or reorganize anything outside the task scope,
+               even if it looks like it "needs" it.
+            2. STYLE CONSISTENCY: Match the existing code style, indentation, naming conventions,
+               and architectural patterns already present. Do not impose external preferences.
+            3. TEST SAFETY: If a test suite exists, run it after your changes and confirm it
+               passes. Do NOT break existing tests. Only add or modify tests if explicitly required.
+            4. PULL REQUEST REQUIRED: Submit ALL changes as a Pull Request — never commit directly.
+               PR title must clearly state what was done.
+               PR body must list every file modified and the reason for each change.
+            5. NEVER MERGE: Do not merge the Pull Request under any circumstances.
+               Human review and approval is mandatory before any merge.
+            6. NEVER push directly to the default branch or any protected branch.
+            7. IF BLOCKED: If the task cannot be completed safely (insufficient context, high
+               regression risk, or ambiguous requirements), open a draft PR describing what was
+               attempted, what was unclear, and what information is needed to proceed.
           jules_api_key: ${{ secrets.JULES_API_KEY }}
           starting_branch: ${{ github.event.repository.default_branch }}
 
@@ -93,22 +115,42 @@ jobs:
         uses: google-labs-code/jules-action@v1.0.0
         with:
           prompt: |
-            DATABASE_CONTEXT: Lavora su questo repository GitHub.
-            USER_REQUEST_ORIGIN: GitHub Issue #${{ github.event.issue.number }}
-            
+            You are a Senior Software Engineer working autonomously on this GitHub repository.
+            Trigger source: GitHub Issue #${{ github.event.issue.number }} (user-submitted task)
+
+            ## ORIENTATION — complete this before touching any file
+            1. Locate and read CLAUDE.md, AGENTS.md, or README.md (check in this order).
+               These files contain project-specific conventions, architecture, and dev commands
+               that you MUST follow. If none exist, infer conventions from the existing codebase.
+            2. Detect the package manager from lock files present in the repo root:
+               pnpm-lock.yaml → pnpm | yarn.lock → yarn | package-lock.json → npm
+               uv.lock / pyproject.toml → uv  | poetry.lock → poetry | Pipfile → pipenv
+            3. Use ONLY the detected package manager. Never mix or substitute it.
+            4. Read the files most relevant to the issue before proposing any solution.
+
+            ## ISSUE TO RESOLVE
             --- USER REQUEST START ---
-            Title: ${{ github.event.issue.title }}
-            
-            Body:
+            Issue #${{ github.event.issue.number }}: ${{ github.event.issue.title }}
+
             ${{ github.event.issue.body }}
             --- USER REQUEST END ---
 
-            ISTRUZIONI CRITICHE:
-            1. Sei un Senior Software Engineer. Agisci con autonomia.
-            2. Se il task richiede la creazione o modifica di un file, esegui il cambiamento DIRETTAMENTE.
-            3. Crea SEMPRE una Pull Request con le modifiche effettuate.
-            4. NON EFFETTUARE MAI IL MERGE della Pull Request. Il merge deve essere eseguito solo manualmente dall'utente.
-            5. Lavora sul branch di default del repository.
+            ## EXECUTION RULES — non-negotiable
+            1. ISSUE SCOPE ONLY: Implement exactly what the issue describes. Do NOT add extra
+               features, refactoring, or "improvements" not explicitly requested in the issue.
+            2. MINIMAL SCOPE: Only modify files directly needed to resolve the issue.
+            3. STYLE CONSISTENCY: Match the existing code style, naming conventions, and patterns.
+            4. TEST SAFETY: If a test suite exists, run it after your changes and confirm it
+               passes. Do NOT break existing tests.
+            5. PULL REQUEST REQUIRED: Create a PR that references the issue.
+               Include "Closes #${{ github.event.issue.number }}" in the PR body.
+               Describe every file changed and why.
+            6. NEVER MERGE: Do not merge the Pull Request under any circumstances.
+               Human review and approval is mandatory before any merge.
+            7. NEVER push directly to the default branch or any protected branch.
+            8. IF AMBIGUOUS: If the issue is unclear, implement the most conservative
+               interpretation and explicitly state your assumption in the PR description.
+               Do not guess silently.
           jules_api_key: ${{ secrets.JULES_API_KEY }}
           starting_branch: ${{ github.event.repository.default_branch }}
 
